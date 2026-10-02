@@ -5,3 +5,6 @@ venv/
 .venv/
 .DS_Store
 Thumbs.db
+
+# GitHub Actions workflows
+.github/workflows/

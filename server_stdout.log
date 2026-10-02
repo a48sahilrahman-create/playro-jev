@@ -1,0 +1,29 @@
+🚀 Play Engine Multi-User Cloud Addon Initialized.
+INFO:     127.0.0.1:52387 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52412 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52418 - "GET /stream/movie/tt0468569.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52418 - "GET /default/playback/resolve?url=https%3A//links.ol-am.top/10790&title=The%20Dark%20Knight HTTP/1.1" 302 Found
+INFO:     127.0.0.1:52418 - "GET /stream/movie/tt0816692.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52418 - "GET /default/playback/resolve?url=https%3A//t.me/Angela2_moviebot%3Fstart%3DZmlsZV9CUUFEQWdBRG53WUFBcTg5eUV1bEgzSVktOTBUZEJZRQ%3D%3D&title=Interstellar HTTP/1.1" 302 Found
+INFO:     127.0.0.1:52418 - "GET /stream/movie/tt15398776.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52418 - "GET /default/playback/resolve?url=https%3A//links.ol-am.top/107887&title=Oppenheimer HTTP/1.1" 302 Found
+INFO:     127.0.0.1:52418 - "GET /stream/movie/tt1375666.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52418 - "GET /default/playback/resolve?url=https%3A//t.me/Angela2_moviebot%3Fstart%3DZmlsZV9CUUFEQkFBREpBNEFBdkE0Z1ZHNjN1WnJMd2Z1OUJZRQ%3D%3D&title=Inception HTTP/1.1" 302 Found
+INFO:     127.0.0.1:52418 - "GET /stream/movie/tt15309808.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52418 - "GET /default/playback/resolve?url=https%3A//t.me/Angela2_moviebot%3Fstart%3DZmlsZV9CUUFEQkFBRF9nNEFBaW9qd1ZQMml3WWJ6cUdQamhZRQ%3D%3D&title=Michael HTTP/1.1" 302 Found
+INFO:     127.0.0.1:52418 - "GET /stream/movie/tt8178634.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52418 - "GET /default/playback/resolve?url=https%3A//t.me/Angela2_moviebot%3Fstart%3DZmlsZV9CUUFEQkFBRFRBc0FBbS1JcVZNdlJDSE5pcWY5WUJZRQ%3D%3D&title=RRR HTTP/1.1" 302 Found
+INFO:     127.0.0.1:52418 - "GET /stream/movie/tt10698680.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52418 - "GET /default/playback/resolve?url=https%3A//nexdrive.fit/genxfm784776203360/&title=K.G.F%3A%20Chapter%202 HTTP/1.1" 302 Found
+INFO:     127.0.0.1:52418 - "GET /stream/movie/tt4633694.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52418 - "GET /default/playback/resolve?url=https%3A//links.ol-am.top/97952&title=Spider-Man%3A%20Into%20the%20Spider-Verse HTTP/1.1" 302 Found
+INFO:     127.0.0.1:52418 - "GET /stream/movie/tt0137523.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52418 - "GET /default/playback/resolve?url=https%3A//links.ol-am.top/112734&title=Fight%20Club HTTP/1.1" 302 Found
+INFO:     127.0.0.1:52418 - "GET /stream/series/tt0903747%3A1%3A1.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52418 - "GET /default/playback/resolve?url=https%3A//t.me/Angela2_moviebot%3Fstart%3DZmlsZV9CUUFEQkFBRHFBZ0FBbGV4S0ZJVV9wZjdBWC1zbGhZRQ%3D%3D&title=Mirror HTTP/1.1" 302 Found
+INFO:     127.0.0.1:53138 - "GET /stream/movie/tt0468569.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53138 - "GET /stream/movie/tt15309808.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53138 - "GET /stream/movie/tt0816692.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53555 - "GET /configure HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53555 - "GET /favicon.ico HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:53606 - "GET /stream/movie/tt11378946.json HTTP/1.1" 200 OK

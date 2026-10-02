@@ -1,0 +1,37 @@
+{
+  "uhdmovies": {
+    "active_mirror": "https://uhdmovies.my",
+    "latency_ms": 0.0,
+    "last_success": 1790843908.0354524,
+    "consecutive_failures": 0,
+    "status": "healthy"
+  },
+  "hdhub4u": {
+    "active_mirror": "https://new1.hdhub4u.free",
+    "latency_ms": 0.0,
+    "last_success": 1790843908.1957345,
+    "consecutive_failures": 0,
+    "status": "healthy"
+  },
+  "vegamovies": {
+    "active_mirror": "https://vegamovies.gallery",
+    "latency_ms": 0.0,
+    "last_success": 1790843908.7714918,
+    "consecutive_failures": 0,
+    "status": "healthy"
+  },
+  "olamovies": {
+    "active_mirror": "https://v6.olamovies.mov",
+    "latency_ms": 0.0,
+    "last_success": 1790843908.8740127,
+    "consecutive_failures": 0,
+    "status": "healthy"
+  },
+  "desiremovies": {
+    "active_mirror": "https://1desiremovies.rodeo",
+    "latency_ms": 1320.17,
+    "last_success": 1790840348.3731382,
+    "consecutive_failures": 0,
+    "status": "healthy"
+  }
+}

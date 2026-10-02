@@ -1,0 +1,73 @@
+{
+  "uhdmovies": {
+    "type": "redirect_or_probe",
+    "resolvers": [
+      "https://uhdmovies.autos/",
+      "https://uhdmovies.my/",
+      "https://uhdmovies.mov/"
+    ],
+    "candidates": [
+      "https://uhdmovies.my",
+      "https://uhdmovies.autos",
+      "https://uhdmovies.mov",
+      "https://uhdmovies.one",
+      "https://uhdmovies.hair",
+      "https://uhdmovies.cloud",
+      "https://uhdmovies.store"
+    ],
+    "fallback": "https://uhdmovies.my",
+    "search_dork": "uhdmovies official website"
+  },
+  "hdhub4u": {
+    "type": "pingora_dns",
+    "dns_endpoint": "https://dns.pingora.fyi/v2/host",
+    "fallback": "https://new1.hdhub4u.free",
+    "backup_domain_from_field_h": "hdhub4u.bi",
+    "candidates": [
+      "https://new1.hdhub4u.free",
+      "https://hdhub4u.bi",
+      "https://new5.hdhub4u.cl",
+      "https://new1.hdhub4u.af"
+    ]
+  },
+  "vegamovies": {
+    "type": "edge_refresh",
+    "edge_endpoint": "https://vglist.lol/?re=vegamovies",
+    "fallback": "https://vegamovies.gallery",
+    "candidates": [
+      "https://vegamovies.gallery",
+      "https://new2.vegamovies.futbol",
+      "https://vegamovies.mov"
+    ],
+    "search_dork": "vegamovies official new domain"
+  },
+  "olamovies": {
+    "type": "subdomain_probe",
+    "base_domain": "olamovies.mov",
+    "subdomains": [
+      "v6",
+      "v7",
+      "v5",
+      "v4",
+      "v3",
+      "v8"
+    ],
+    "candidates": [
+      "https://v6.olamovies.mov",
+      "https://v4.olamovies.mov",
+      "https://olamovies.dad",
+      "https://olamovies.mov"
+    ],
+    "fallback": "https://v6.olamovies.mov"
+  },
+  "desiremovies": {
+    "type": "redirect_or_probe",
+    "candidates": [
+      "https://1desiremovies.rodeo",
+      "https://1desiremovies.wales",
+      "https://1desiremovies.nexus",
+      "https://1desiremovies.cymru"
+    ],
+    "fallback": "https://1desiremovies.rodeo"
+  }
+}

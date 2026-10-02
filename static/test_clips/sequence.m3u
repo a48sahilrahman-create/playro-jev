@@ -1,0 +1,7 @@
+#EXTM3U
+#EXTINF:10,Test Clip 1 - Big Buck Bunny (10s)
+http://127.0.0.1:7860/static/test_clips/clip1_bunny.mp4
+#EXTINF:10,Test Clip 2 - Jellyfish (10s)
+http://127.0.0.1:7860/static/test_clips/clip2_jellyfish.mp4
+#EXTINF:10,Test Clip 3 - Flower (10s)
+http://127.0.0.1:7860/static/test_clips/clip3_flower.mp4

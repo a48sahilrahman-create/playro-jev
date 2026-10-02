@@ -1,0 +1,117 @@
+{
+  "description": "JEV Media CDN Priority Ranking - Zero-Login High-Speed Direct Stream Preference Matrix",
+  "version": "2.0.0",
+  "rules": [
+    {
+      "pattern_name": "Cloudflare Workers Direct CDN",
+      "regex": "https?://[a-zA-Z0-9.-]+\\.workers\\.dev/[^\\s'\"<>\\]+",
+      "type": "worker_direct",
+      "label": "Cloud Resume Worker",
+      "score": 100,
+      "requires_login": false,
+      "supports_range": true,
+      "recommended_action": "direct_stream"
+    },
+    {
+      "pattern_name": "Cloudflare R2 Storage Direct",
+      "regex": "https?://[a-zA-Z0-9.-]+(?:\\.r2\\.cloudflarestorage\\.com|\\.r2\\.dev)/[^\\s'\"<>\\]+",
+      "type": "r2_direct",
+      "label": "Cloudflare R2 Direct",
+      "score": 95,
+      "requires_login": false,
+      "supports_range": true,
+      "recommended_action": "direct_stream"
+    },
+    {
+      "pattern_name": "Pixeldrain API Stream",
+      "regex": "https?://pixeldrain\\.(?:com|dev)/(?:api/file/|u/)([a-zA-Z0-9]+)",
+      "type": "pixeldrain",
+      "label": "Pixeldrain API",
+      "score": 90,
+      "requires_login": false,
+      "supports_range": true,
+      "url_template": "https://pixeldrain.dev/api/file/{id}",
+      "recommended_action": "direct_stream"
+    },
+    {
+      "pattern_name": "Google Usercontent CDN Instant Stream",
+      "regex": "https?://video-downloads\\.googleusercontent\\.com/[^\\s'\"<>\\]+",
+      "type": "instant_cdn",
+      "label": "Google CDN Instant Download",
+      "score": 85,
+      "requires_login": false,
+      "supports_range": true,
+      "recommended_action": "direct_stream"
+    },
+    {
+      "pattern_name": "VideoGen / VideoSeed Gateway",
+      "regex": "https?://(?:cdn\\.video-[a-zA-Z0-9_-]+\\.xyz|video-seed\\.dev|video-plex\\.xyz)/[^\\s'\"<>\\]+",
+      "type": "instant_cdn",
+      "label": "Instant Download CDN",
+      "score": 80,
+      "requires_login": false,
+      "supports_range": true,
+      "recommended_action": "resolve_to_google_cdn"
+    },
+    {
+      "pattern_name": "DriveSeed Resume Cloud Gateway",
+      "regex": "(?:https?://[^/\\s'\"<>\\]+)?/zfile/[a-zA-Z0-9_-]+",
+      "type": "zfile_gateway",
+      "label": "Resume Cloud Gateway",
+      "score": 75,
+      "requires_login": false,
+      "supports_range": true,
+      "recommended_action": "resolve_to_worker"
+    },
+    {
+      "pattern_name": "Google Drive Direct Confirmation Token",
+      "regex": "https?://drive\\.usercontent\\.google\\.com/download\\?[^\\s'\"<>\\]*confirm=[^\\s'\"<>&]+",
+      "type": "google_drive_direct",
+      "label": "Google Drive Direct",
+      "score": 70,
+      "requires_login": false,
+      "supports_range": true,
+      "recommended_action": "direct_stream"
+    },
+    {
+      "pattern_name": "Standard Direct Video File",
+      "regex": "https?://[^\\s'\"<>\\]+\\.(?:mkv|mp4|avi|webm)(?:\\?[^\\s'\"<>\\]*)?",
+      "type": "direct_video",
+      "label": "Direct Video Stream",
+      "score": 65,
+      "requires_login": false,
+      "supports_range": true,
+      "recommended_action": "direct_stream"
+    },
+    {
+      "pattern_name": "Google Drive Standard File ID",
+      "regex": "https?://drive\\.google\\.com/file/d/([a-zA-Z0-9_-]+)",
+      "type": "google_drive",
+      "label": "Google Drive",
+      "score": 50,
+      "requires_login": false,
+      "supports_range": false,
+      "recommended_action": "extract_confirm_token"
+    },
+    {
+      "pattern_name": "Interactive Google Drive / Virus Warning",
+      "regex": "https?://drive\\.google\\.com/uc\\?[^\\s'\"<>\\]*export=download",
+      "type": "google_drive_warning",
+      "label": "Google Drive Virus Warning",
+      "score": 40,
+      "requires_login": false,
+      "supports_range": false,
+      "recommended_action": "extract_confirm_token"
+    },
+    {
+      "pattern_name": "Interactive Login Protected Gateway",
+      "regex": "https?://(?:gdtot|katdrive|drivebuzz|kolop|sharer|filebee)\\.[a-z]+/[^\\s'\"<>\\]+",
+      "type": "interactive_login",
+      "label": "Interactive Login Required",
+      "score": 10,
+      "requires_login": true,
+      "supports_range": false,
+      "recommended_action": "avoid_if_zero_login_available"
+    }
+  ]
+}

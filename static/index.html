@@ -117,6 +117,9 @@
                 <span id="vlcStateLabel" class="font-mono text-zinc-400 font-semibold">OFF</span>
             </button>
 
+            <!-- Audio & Codec Studio Button -->
+            <button id="navAudioStudioBtn" onclick="toggleAudioPanel(true)" class="focusable flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border border-indigo-500/30 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 transition-colors" tabindex="0" title="Audio & Codec Studio (AAC / Dolby / DTS / Boost)"><span>🎧 Audio</span><span class="text-[10px] font-mono px-1 rounded bg-indigo-500/30 text-indigo-200">AAC/DTS</span></button>
+
             <!-- Catalog Addons Quick Button -->
             <button onclick="openAddonsModal()" class="focusable p-2 rounded-full text-zinc-400 hover:text-white hover:bg-zinc-800 border border-white/10 transition-colors" tabindex="0" title="Stremio Catalog Addons">
                 🧩
@@ -144,10 +147,13 @@
 
             <!-- Hero Meta Content -->
             <div class="relative z-10 max-w-2xl space-y-3">
-                <div class="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-white/10 backdrop-blur-md border border-white/10 text-xs font-mono font-semibold tracking-wide text-zinc-200">
-                    <span id="heroBadge">4K UHD • DOLBY ATMOS</span>
-                    <span class="text-zinc-400">•</span>
-                    <span id="heroRating" class="text-amber-400">★ 9.0</span>
+                <div class="flex flex-wrap items-center gap-2">
+                    <div class="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-white/10 backdrop-blur-md border border-white/10 text-xs font-mono font-semibold tracking-wide text-zinc-200">
+                        <span id="heroBadge">4K UHD • DOLBY ATMOS</span>
+                        <span class="text-zinc-400">•</span>
+                        <span id="heroRating" class="text-amber-400">★ 9.0</span>
+                    </div>
+                    <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-zinc-900/80 border border-white/10 text-xs text-zinc-300 font-mono"><span class="h-2 w-2 rounded-full bg-emerald-500"></span><span>Engine: Smart Audio &amp; Zero-Copy Transcode Active</span></div>
                 </div>
                 <h1 id="heroTitle" class="text-3xl sm:text-4xl md:text-5xl font-extrabold tracking-tight text-white leading-tight">
                     The Dark Knight
@@ -206,13 +212,16 @@
 
         <!-- Trending Catalog Row -->
         <section id="trendingCatalogSection" class="px-6 md:px-12 mt-8">
-            <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
                 <h2 id="catalogSectionTitle" class="text-base sm:text-lg font-bold tracking-tight text-white flex items-center gap-2">
                     <span>🔥 Trending Across Content Networks</span>
                 </h2>
-                <div class="flex items-center gap-1.5 text-xs text-zinc-400 font-mono">
-                    <span class="h-2 w-2 rounded-full bg-emerald-500 animate-ping"></span>
-                    <span>Live Aggregator</span>
+                <div class="flex items-center gap-3">
+                    <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-zinc-900/80 border border-white/10 text-xs text-zinc-300 font-mono"><span class="h-2 w-2 rounded-full bg-emerald-500"></span><span>Engine: Smart Audio &amp; Zero-Copy Transcode Active</span></div>
+                    <div class="flex items-center gap-1.5 text-xs text-zinc-400 font-mono">
+                        <span class="h-2 w-2 rounded-full bg-emerald-500 animate-ping"></span>
+                        <span>Live Aggregator</span>
+                    </div>
                 </div>
             </div>
             <div id="trendingGrid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
@@ -259,7 +268,7 @@
     <!-- Embedded High-Performance Video Player Overlay -->
     <div id="playerOverlay" class="hidden fixed inset-0 z-50 bg-black flex flex-col justify-center items-center">
         <!-- Player Header / Controls Bar -->
-        <div class="absolute top-0 left-0 right-0 p-6 flex items-center justify-between z-20 bg-gradient-to-b from-black/80 to-transparent">
+        <div id="playerHeaderBar" class="absolute top-0 left-0 right-0 p-6 flex items-center justify-between z-20 bg-gradient-to-b from-black/80 to-transparent transition-opacity duration-300">
             <div class="flex items-center gap-4">
                 <button onclick="closeVideoPlayer()" class="focusable p-2 rounded-full bg-zinc-900/80 hover:bg-zinc-800 text-white border border-white/10" tabindex="0">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
@@ -287,119 +296,196 @@
         <!-- Video Element -->
         <video id="videoElement" class="w-full h-full max-h-screen object-contain" controls autoplay playsinline></video>
 
-        <!-- Slide-over / Floating Audio & Codec Studio Modal -->
-        <div id="audioControlPanel" class="hidden absolute top-20 right-4 sm:right-6 z-30 w-96 max-w-[calc(100vw-2rem)] max-h-[calc(100vh-6.5rem)] glass-panel bg-zinc-900/95 backdrop-blur-2xl rounded-2xl border border-white/10 shadow-2xl p-5 overflow-y-auto space-y-4 text-white text-xs hide-scrollbar transition-all duration-300">
-            <!-- Header -->
-            <div class="flex items-center justify-between pb-3 border-b border-white/10">
+        <!-- Playback Controls Alongside Video -->
+        <div id="playerControlsContainer" class="absolute bottom-0 left-0 right-0 p-4 sm:p-6 z-20 bg-gradient-to-t from-black/95 via-black/80 to-transparent flex flex-col gap-2.5 transition-opacity duration-300">
+            <!-- Timeline Scrubber Bar with Current Time and Duration Display -->
+            <div class="flex items-center gap-3 w-full">
+                <span id="playerCurrentTimeDisplay" class="text-xs font-mono font-bold text-white min-w-[45px] text-right">0:00</span>
+                <input type="range" id="playerProgressBar" min="0" max="100" value="0" step="0.5"
+                       oninput="onScrubberInput(this.value)"
+                       onchange="onScrubberChange(this.value)"
+                       class="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-indigo-500 hover:accent-indigo-400 focus:outline-none transition-all">
+                <span id="playerDurationDisplay" class="text-xs font-mono text-zinc-400 min-w-[45px]">0:00</span>
+            </div>
+
+            <!-- Controls Row: Play/Pause, -10s, +10s, Fullscreen -->
+            <div class="flex items-center justify-between">
                 <div class="flex items-center gap-2">
-                    <span class="text-base">🎧</span>
-                    <div>
-                        <h4 class="font-bold text-sm tracking-tight text-white leading-none">Audio &amp; Codec Studio</h4>
-                        <span class="text-[10px] text-zinc-400 font-mono">Stream Diagnostic &amp; Tuning</span>
-                    </div>
+                    <button id="playerPlayPauseBtn" onclick="togglePlayPause()" class="focusable px-3 py-1.5 rounded-xl bg-white hover:bg-zinc-200 text-zinc-950 font-bold text-xs flex items-center gap-1.5 transition-all shadow-md active:scale-95" tabindex="0" title="Play/Pause (Space)">
+                        <span id="playerPlayPauseIcon">⏸</span>
+                        <span id="playerPlayPauseText">Pause</span>
+                    </button>
+                    <button onclick="skipRelative(-10)" class="focusable px-3 py-1.5 rounded-xl bg-zinc-900/90 hover:bg-zinc-800 text-white font-mono text-xs font-semibold flex items-center gap-1 border border-white/10 transition-all shadow-sm active:scale-95" tabindex="0" title="Rewind 10s (←)">
+                        ⏪ -10s
+                    </button>
+                    <button onclick="skipRelative(10)" class="focusable px-3 py-1.5 rounded-xl bg-zinc-900/90 hover:bg-zinc-800 text-white font-mono text-xs font-semibold flex items-center gap-1 border border-white/10 transition-all shadow-sm active:scale-95" tabindex="0" title="Forward 10s (→)">
+                        ⏩ +10s
+                    </button>
                 </div>
-                <button onclick="toggleAudioPanel()" class="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white transition-colors" title="Close Panel">✕</button>
+                <div class="flex items-center gap-2">
+                    <button onclick="toggleFullscreen()" class="focusable px-3 py-1.5 rounded-xl bg-zinc-900/90 hover:bg-zinc-800 text-white font-mono text-xs flex items-center gap-1.5 border border-white/10 transition-all shadow-sm active:scale-95" tabindex="0" title="Toggle Fullscreen (F)">
+                        <span>⛶</span>
+                        <span>Fullscreen</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Audio Modal Backdrop (Active when opened from Nav/Catalog) -->
+    <div id="audioModalBackdrop" class="hidden fixed inset-0 z-[55] bg-black/80 backdrop-blur-md transition-opacity duration-300" onclick="toggleAudioPanel()"></div>
+
+    <!-- Slide-over / Floating / Modal Audio & Codec Studio -->
+    <div id="audioControlPanel" class="hidden fixed z-[60] glass-panel bg-zinc-900/95 backdrop-blur-2xl rounded-2xl border border-white/10 shadow-2xl p-5 overflow-y-auto space-y-4 text-white text-xs hide-scrollbar transition-all duration-300">
+        <!-- Header -->
+        <div class="flex items-center justify-between pb-3 border-b border-white/10">
+            <div class="flex items-center gap-2">
+                <span class="text-base">🎧</span>
+                <div>
+                    <h4 class="font-bold text-sm tracking-tight text-white leading-none">Audio &amp; Codec Studio</h4>
+                    <span id="audioPanelSubtitle" class="text-[10px] text-zinc-400 font-mono">Stream Diagnostic &amp; Tuning</span>
+                </div>
+            </div>
+            <button onclick="toggleAudioPanel()" class="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white transition-colors" title="Close Panel">✕</button>
+        </div>
+
+        <!-- Live Codec Badges -->
+        <div class="space-y-1.5">
+            <span class="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider block font-mono">Live Codec Badges</span>
+            <div class="flex items-center gap-2 flex-wrap" id="audioCodecBadgesContainer">
+                <span id="audioDetectedCodecBadge" class="px-2 py-0.5 rounded font-mono text-[11px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">[AAC 2.0]</span>
+                <span id="audioContainerBadge" class="px-2 py-0.5 rounded font-mono text-[11px] font-bold bg-zinc-800 text-zinc-300 border border-white/10">[MP4]</span>
+                <span id="audioEngineBadge" class="px-2 py-0.5 rounded font-mono text-[11px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">Direct Stream</span>
+            </div>
+        </div>
+
+        <!-- Hardware & Codec Support Diagnostic -->
+        <div class="space-y-1.5 p-3 rounded-xl bg-zinc-950/60 border border-white/5">
+            <div class="flex items-center justify-between">
+                <span class="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider font-mono">Hardware &amp; Browser Codec Support</span>
+                <span id="audioEngineStatusPill" class="text-[9px] font-mono text-emerald-400 font-bold">● Engine Active</span>
+            </div>
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-1.5 pt-1">
+                <div class="px-2 py-1.5 rounded-lg bg-zinc-900/90 border border-white/10 text-center">
+                    <div class="font-mono font-bold text-white text-[11px]">AAC / MP4</div>
+                    <div class="text-[9px] text-emerald-400 font-semibold">Native Direct</div>
+                </div>
+                <div class="px-2 py-1.5 rounded-lg bg-zinc-900/90 border border-white/10 text-center">
+                    <div class="font-mono font-bold text-white text-[11px]">OPUS / WebM</div>
+                    <div class="text-[9px] text-emerald-400 font-semibold">Native Direct</div>
+                </div>
+                <div class="px-2 py-1.5 rounded-lg bg-zinc-900/90 border border-white/10 text-center">
+                    <div class="font-mono font-bold text-white text-[11px]">AC-3 / E-AC-3</div>
+                    <div class="text-[9px] text-indigo-300 font-semibold">Smart Transcode</div>
+                </div>
+                <div class="px-2 py-1.5 rounded-lg bg-zinc-900/90 border border-white/10 text-center">
+                    <div class="font-mono font-bold text-white text-[11px]">DTS / TrueHD</div>
+                    <div class="text-[9px] text-orange-300 font-semibold">Zero-Copy / VLC</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Audio Output & Device Test -->
+        <div class="p-3 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-between gap-3">
+            <div>
+                <div class="text-xs font-bold text-indigo-200 flex items-center gap-1.5">
+                    <span>🔊 Audio Output &amp; Boost Test</span>
+                </div>
+                <p class="text-[10px] text-indigo-300/80">Play test frequency chime through speaker &amp; active EQ profile</p>
+            </div>
+            <button id="testAudioBtn" onclick="testAudioOutput()" class="focusable px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[11px] flex items-center gap-1.5 transition-all shadow-sm active:scale-95 whitespace-nowrap" tabindex="0">
+                <span>▶ Test Sound</span>
+            </button>
+        </div>
+
+        <!-- Silent Audio Alert Banner -->
+        <div id="silentAudioAlertBanner" class="hidden p-3 rounded-xl bg-amber-500/15 border border-amber-500/30 space-y-2">
+            <div class="flex items-start gap-2">
+                <span class="text-amber-400 text-sm">⚠️</span>
+                <div class="text-[11px] text-amber-200 leading-snug">
+                    <span class="font-bold" id="silentAudioCodecName">Dolby TrueHD / DTS / AC-3</span> audio detected. Browser Direct mode may output silent audio. Switch to Smart Transcode or VLC below.
+                </div>
+            </div>
+            <div class="flex items-center gap-2 pt-1">
+                <button onclick="switchPlaybackEngine('transcode')" class="flex-1 py-1.5 px-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[11px] text-center transition-colors shadow-sm">
+                    🔄 Smart Transcode
+                </button>
+                <button onclick="switchPlaybackEngine('vlc')" class="flex-1 py-1.5 px-2 rounded-lg bg-orange-600 hover:bg-orange-500 text-white font-bold text-[11px] text-center transition-colors shadow-sm">
+                    ▲ Launch in VLC
+                </button>
+            </div>
+        </div>
+
+        <!-- Playback Engine Switcher (3 toggle buttons) -->
+        <div class="space-y-1.5">
+            <label class="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider block font-mono">Playback Engine</label>
+            <div class="grid grid-cols-1 gap-1.5">
+                <button id="engineBtn_direct" onclick="switchPlaybackEngine('direct')" class="w-full px-3 py-2 rounded-xl text-left text-xs font-semibold flex items-center justify-between border transition-all bg-white text-zinc-950 border-white shadow-sm">
+                    <span class="flex items-center gap-2">
+                        <span>⚡</span>
+                        <span>Direct Web Stream</span>
+                    </span>
+                    <span class="text-[10px] font-mono opacity-80 font-bold">Original Bits</span>
+                </button>
+                <button id="engineBtn_transcode" onclick="switchPlaybackEngine('transcode')" class="w-full px-3 py-2 rounded-xl text-left text-xs font-semibold flex items-center justify-between border transition-all bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border-white/10">
+                    <span class="flex items-center gap-2">
+                        <span>🔄</span>
+                        <span>Smart Audio Transcode</span>
+                    </span>
+                    <span class="text-[10px] font-mono text-indigo-400 font-bold">FFmpeg Copy + AAC</span>
+                </button>
+                <button id="engineBtn_vlc" onclick="switchPlaybackEngine('vlc')" class="w-full px-3 py-2 rounded-xl text-left text-xs font-semibold flex items-center justify-between border transition-all bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border-white/10">
+                    <span class="flex items-center gap-2">
+                        <span>▲</span>
+                        <span>External VLC Player</span>
+                    </span>
+                    <span class="text-[10px] font-mono text-orange-400 font-bold">HW Bitstream</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Audio Track Selector -->
+        <div class="space-y-1.5">
+            <div class="flex items-center justify-between">
+                <label class="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider font-mono">Audio Track Selector</label>
+                <span id="audioTrackCountBadge" class="text-[10px] font-mono text-zinc-400">1 Track</span>
+            </div>
+            <div id="audioTracksList" class="space-y-1.5 max-h-40 overflow-y-auto pr-1 hide-scrollbar">
+                <div class="text-zinc-500 text-[11px] py-2 text-center font-mono">Probing audio tracks...</div>
+            </div>
+        </div>
+
+        <!-- WebAudio Dialogue Booster & Equalizer -->
+        <div class="space-y-3 pt-2 border-t border-white/10">
+            <div class="flex items-center justify-between">
+                <label class="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider font-mono">Dialogue Booster &amp; EQ</label>
+                <span id="volumeBoostVal" class="text-[11px] font-mono font-bold text-emerald-400">100%</span>
             </div>
 
-            <!-- Live Codec Badges -->
+            <!-- Volume Boost Slider (100% to 300%) -->
+            <div class="space-y-1">
+                <div class="flex items-center justify-between text-[10px] text-zinc-400">
+                    <span>Volume Boost</span>
+                    <span class="font-mono">100% – 300%</span>
+                </div>
+                <input type="range" id="volumeBoostSlider" min="100" max="300" step="5" value="100"
+                       oninput="onVolumeBoostChange(this.value)"
+                       class="w-full h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-emerald-500">
+            </div>
+
+            <!-- Profiles: Standard, Dialogue Clarity, Night Mode -->
             <div class="space-y-1.5">
-                <span class="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider block font-mono">Live Codec Badges</span>
-                <div class="flex items-center gap-2 flex-wrap" id="audioCodecBadgesContainer">
-                    <span id="audioDetectedCodecBadge" class="px-2 py-0.5 rounded font-mono text-[11px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">[AAC 2.0]</span>
-                    <span id="audioContainerBadge" class="px-2 py-0.5 rounded font-mono text-[11px] font-bold bg-zinc-800 text-zinc-300 border border-white/10">[MP4]</span>
-                    <span id="audioEngineBadge" class="px-2 py-0.5 rounded font-mono text-[11px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">Direct Stream</span>
-                </div>
-            </div>
-
-            <!-- Silent Audio Alert Banner -->
-            <div id="silentAudioAlertBanner" class="hidden p-3 rounded-xl bg-amber-500/15 border border-amber-500/30 space-y-2">
-                <div class="flex items-start gap-2">
-                    <span class="text-amber-400 text-sm">⚠️</span>
-                    <div class="text-[11px] text-amber-200 leading-snug">
-                        <span class="font-bold" id="silentAudioCodecName">Dolby TrueHD / DTS / AC-3</span> audio detected. Browser Direct mode may output silent audio. Switch to Smart Transcode or VLC below.
-                    </div>
-                </div>
-                <div class="flex items-center gap-2 pt-1">
-                    <button onclick="switchPlaybackEngine('transcode')" class="flex-1 py-1.5 px-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[11px] text-center transition-colors shadow-sm">
-                        🔄 Smart Transcode
+                <span class="text-[10px] text-zinc-400 font-mono">Sound Profiles</span>
+                <div class="grid grid-cols-3 gap-1.5">
+                    <button id="profileBtn_standard" onclick="setAudioProfile('standard')" class="px-2 py-1.5 rounded-lg text-center text-[10px] font-bold border transition-all bg-white text-zinc-950 border-white shadow-sm">
+                        Standard
                     </button>
-                    <button onclick="switchPlaybackEngine('vlc')" class="flex-1 py-1.5 px-2 rounded-lg bg-orange-600 hover:bg-orange-500 text-white font-bold text-[11px] text-center transition-colors shadow-sm">
-                        ▲ Launch in VLC
+                    <button id="profileBtn_dialogue" onclick="setAudioProfile('dialogue')" class="px-2 py-1.5 rounded-lg text-center text-[10px] font-bold border transition-all bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border-white/10" title="+4dB voice boost via BiquadFilter">
+                        Dialogue Clarity
                     </button>
-                </div>
-            </div>
-
-            <!-- Playback Engine Switcher (3 toggle buttons) -->
-            <div class="space-y-1.5">
-                <label class="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider block font-mono">Playback Engine</label>
-                <div class="grid grid-cols-1 gap-1.5">
-                    <button id="engineBtn_direct" onclick="switchPlaybackEngine('direct')" class="w-full px-3 py-2 rounded-xl text-left text-xs font-semibold flex items-center justify-between border transition-all bg-white text-zinc-950 border-white shadow-sm">
-                        <span class="flex items-center gap-2">
-                            <span>⚡</span>
-                            <span>Direct Web Stream</span>
-                        </span>
-                        <span class="text-[10px] font-mono opacity-80 font-bold">Original Bits</span>
+                    <button id="profileBtn_night" onclick="setAudioProfile('night')" class="px-2 py-1.5 rounded-lg text-center text-[10px] font-bold border transition-all bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border-white/10" title="DynamicsCompressorNode compression">
+                        Night Mode
                     </button>
-                    <button id="engineBtn_transcode" onclick="switchPlaybackEngine('transcode')" class="w-full px-3 py-2 rounded-xl text-left text-xs font-semibold flex items-center justify-between border transition-all bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border-white/10">
-                        <span class="flex items-center gap-2">
-                            <span>🔄</span>
-                            <span>Smart Audio Transcode</span>
-                        </span>
-                        <span class="text-[10px] font-mono text-indigo-400 font-bold">FFmpeg Copy + AAC</span>
-                    </button>
-                    <button id="engineBtn_vlc" onclick="switchPlaybackEngine('vlc')" class="w-full px-3 py-2 rounded-xl text-left text-xs font-semibold flex items-center justify-between border transition-all bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border-white/10">
-                        <span class="flex items-center gap-2">
-                            <span>▲</span>
-                            <span>External VLC Player</span>
-                        </span>
-                        <span class="text-[10px] font-mono text-orange-400 font-bold">HW Bitstream</span>
-                    </button>
-                </div>
-            </div>
-
-            <!-- Audio Track Selector -->
-            <div class="space-y-1.5">
-                <div class="flex items-center justify-between">
-                    <label class="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider font-mono">Audio Track Selector</label>
-                    <span id="audioTrackCountBadge" class="text-[10px] font-mono text-zinc-400">1 Track</span>
-                </div>
-                <div id="audioTracksList" class="space-y-1.5 max-h-40 overflow-y-auto pr-1 hide-scrollbar">
-                    <div class="text-zinc-500 text-[11px] py-2 text-center font-mono">Probing audio tracks...</div>
-                </div>
-            </div>
-
-            <!-- WebAudio Dialogue Booster & Equalizer -->
-            <div class="space-y-3 pt-2 border-t border-white/10">
-                <div class="flex items-center justify-between">
-                    <label class="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider font-mono">Dialogue Booster &amp; EQ</label>
-                    <span id="volumeBoostVal" class="text-[11px] font-mono font-bold text-emerald-400">100%</span>
-                </div>
-
-                <!-- Volume Boost Slider (100% to 300%) -->
-                <div class="space-y-1">
-                    <div class="flex items-center justify-between text-[10px] text-zinc-400">
-                        <span>Volume Boost</span>
-                        <span class="font-mono">100% – 300%</span>
-                    </div>
-                    <input type="range" id="volumeBoostSlider" min="100" max="300" step="5" value="100"
-                           oninput="onVolumeBoostChange(this.value)"
-                           class="w-full h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-emerald-500">
-                </div>
-
-                <!-- Profiles: Standard, Dialogue Clarity, Night Mode -->
-                <div class="space-y-1.5">
-                    <span class="text-[10px] text-zinc-400 font-mono">Sound Profiles</span>
-                    <div class="grid grid-cols-3 gap-1.5">
-                        <button id="profileBtn_standard" onclick="setAudioProfile('standard')" class="px-2 py-1.5 rounded-lg text-center text-[10px] font-bold border transition-all bg-white text-zinc-950 border-white shadow-sm">
-                            Standard
-                        </button>
-                        <button id="profileBtn_dialogue" onclick="setAudioProfile('dialogue')" class="px-2 py-1.5 rounded-lg text-center text-[10px] font-bold border transition-all bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border-white/10" title="+4dB voice boost via BiquadFilter">
-                            Dialogue Clarity
-                        </button>
-                        <button id="profileBtn_night" onclick="setAudioProfile('night')" class="px-2 py-1.5 rounded-lg text-center text-[10px] font-bold border transition-all bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border-white/10" title="DynamicsCompressorNode compression">
-                            Night Mode
-                        </button>
-                    </div>
                 </div>
             </div>
         </div>
@@ -592,6 +678,10 @@
         let currentAudioProbeData = null;
         let selectedAudioTrackIndex = 0;
         let currentVolumeBoostPercent = 100;
+        let transcodeBaseOffset = 0;
+        let isUserScrubbing = false;
+        let pendingDirectSeekTime = null;
+        let controlsHideTimeout = null;
 
         function showToast(message, type = 'info') {
             const container = document.getElementById('toastContainer');
@@ -623,6 +713,8 @@
             initAutoplayListener();
             initPlaybackTimeTracker();
             initAudioControlListeners();
+            initPlayerKeyboardListeners();
+            setupPlayerControlsAutoHide();
             loadSavedConfig();
             initSearchAutocomplete();
             await loadInstalledAddons();
@@ -645,17 +737,53 @@
             }
         }
 
-        // Track video playback time for instant resume in Continue Watching
+        // Track video playback time for instant resume in Continue Watching & Scrubber UI
         function initPlaybackTimeTracker() {
             const video = document.getElementById('videoElement');
+            if (!video) return;
             let lastSave = 0;
+
             video.addEventListener('timeupdate', () => {
+                const cur = getCurrentPlaybackTime();
+                const dur = getTotalDuration();
+
                 const now = Date.now();
-                if (now - lastSave > 2000 && currentMediaTitle && video.currentTime > 0) {
+                if (now - lastSave > 2000 && currentMediaTitle && cur > 0) {
                     lastSave = now;
-                    updateHistoryProgress(currentMediaTitle, video.currentTime, video.duration || 0);
+                    updateHistoryProgress(currentMediaTitle, cur, dur || 0);
+                }
+
+                if (!isUserScrubbing) {
+                    const bar = document.getElementById('playerProgressBar');
+                    if (bar) {
+                        if (dur > 0) bar.max = dur;
+                        bar.value = cur;
+                    }
+                    const curDisplay = document.getElementById('playerCurrentTimeDisplay');
+                    if (curDisplay) curDisplay.innerText = formatTime(cur);
+                    const durDisplay = document.getElementById('playerDurationDisplay');
+                    if (durDisplay && dur > 0) durDisplay.innerText = formatTime(dur);
                 }
             });
+
+            video.addEventListener('loadedmetadata', () => {
+                const dur = getTotalDuration();
+                const bar = document.getElementById('playerProgressBar');
+                if (bar && dur > 0) bar.max = dur;
+                const durDisplay = document.getElementById('playerDurationDisplay');
+                if (durDisplay && dur > 0) durDisplay.innerText = formatTime(dur);
+            });
+
+            video.addEventListener('durationchange', () => {
+                const dur = getTotalDuration();
+                const bar = document.getElementById('playerProgressBar');
+                if (bar && dur > 0) bar.max = dur;
+                const durDisplay = document.getElementById('playerDurationDisplay');
+                if (durDisplay && dur > 0) durDisplay.innerText = formatTime(dur);
+            });
+
+            video.addEventListener('play', () => updatePlayPauseButtonUI(false));
+            video.addEventListener('pause', () => updatePlayPauseButtonUI(true));
         }
 
         // 1. Trending Catalog Loader & Filter
@@ -819,6 +947,11 @@
         // Listen for ESC key to close modals and full-page detail view
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
+                const audioPanel = document.getElementById('audioControlPanel');
+                if (audioPanel && !audioPanel.classList.contains('hidden')) {
+                    toggleAudioPanel();
+                    return;
+                }
                 const addonsModal = document.getElementById('addonsModal');
                 if (addonsModal && !addonsModal.classList.contains('hidden')) {
                     closeAddonsModal();
@@ -2014,6 +2147,46 @@
             if (video) {
                 video.addEventListener('play', () => initWebAudio());
             }
+
+            // Restore saved volume boost default from localStorage
+            const savedBoost = localStorage.getItem('playro_audio_boost');
+            if (savedBoost) {
+                currentVolumeBoostPercent = parseInt(savedBoost, 10) || 100;
+                const valEl = document.getElementById('volumeBoostVal');
+                const slider = document.getElementById('volumeBoostSlider');
+                if (valEl) valEl.innerText = `${currentVolumeBoostPercent}%`;
+                if (slider) slider.value = currentVolumeBoostPercent;
+            }
+
+            // Restore saved audio profile default from localStorage
+            const savedProfile = localStorage.getItem('playro_audio_profile');
+            if (savedProfile) {
+                currentAudioProfile = savedProfile;
+                ['standard', 'dialogue', 'night'].forEach(p => {
+                    const btn = document.getElementById(`profileBtn_${p}`);
+                    if (!btn) return;
+                    if (p === savedProfile) {
+                        btn.className = "px-2 py-1.5 rounded-lg text-center text-[10px] font-bold border transition-all bg-white text-zinc-950 border-white shadow-sm";
+                    } else {
+                        btn.className = "px-2 py-1.5 rounded-lg text-center text-[10px] font-bold border transition-all bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border-white/10";
+                    }
+                });
+            }
+
+            // Restore saved playback engine default from localStorage
+            const savedEngine = localStorage.getItem('playro_default_audio_engine');
+            if (savedEngine) {
+                currentPlaybackEngine = savedEngine;
+                ['direct', 'transcode', 'vlc'].forEach(mode => {
+                    const btn = document.getElementById(`engineBtn_${mode}`);
+                    if (!btn) return;
+                    if (mode === savedEngine) {
+                        btn.className = "w-full px-3 py-2 rounded-xl text-left text-xs font-semibold flex items-center justify-between border transition-all bg-white text-zinc-950 border-white shadow-sm";
+                    } else {
+                        btn.className = "w-full px-3 py-2 rounded-xl text-left text-xs font-semibold flex items-center justify-between border transition-all bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border-white/10";
+                    }
+                });
+            }
         }
 
         function initWebAudio() {
@@ -2065,20 +2238,120 @@
             }
         }
 
-        function toggleAudioPanel() {
+        function toggleAudioPanel(fromNav = false) {
             const panel = document.getElementById('audioControlPanel');
+            const backdrop = document.getElementById('audioModalBackdrop');
+            const playerOverlay = document.getElementById('playerOverlay');
             if (!panel) return;
+
+            const isPlayerActive = playerOverlay && !playerOverlay.classList.contains('hidden');
             const isHidden = panel.classList.contains('hidden');
+
             if (isHidden) {
+                // If opened from nav when video overlay is not active, display as centered modal with backdrop
+                if (fromNav || !isPlayerActive) {
+                    if (backdrop) backdrop.classList.remove('hidden');
+                    panel.className = "fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[60] w-full max-w-md sm:max-w-lg max-h-[88vh] glass-panel bg-zinc-900/95 backdrop-blur-2xl rounded-3xl border border-white/10 shadow-2xl p-5 sm:p-6 overflow-y-auto space-y-4 text-white text-xs hide-scrollbar transition-all duration-300";
+                    updateAudioStudioNavState();
+                } else {
+                    if (backdrop) backdrop.classList.add('hidden');
+                    panel.className = "fixed top-20 right-4 sm:right-6 z-[60] w-96 max-w-[calc(100vw-2rem)] max-h-[calc(100vh-6.5rem)] glass-panel bg-zinc-900/95 backdrop-blur-2xl rounded-2xl border border-white/10 shadow-2xl p-5 overflow-y-auto space-y-4 text-white text-xs hide-scrollbar transition-all duration-300";
+                }
                 panel.classList.remove('hidden');
                 initWebAudio();
             } else {
                 panel.classList.add('hidden');
+                if (backdrop) backdrop.classList.add('hidden');
+            }
+        }
+
+        function updateAudioStudioNavState() {
+            const subtitle = document.getElementById('audioPanelSubtitle');
+            const codecEl = document.getElementById('audioDetectedCodecBadge');
+            const containerEl = document.getElementById('audioContainerBadge');
+            const engineEl = document.getElementById('audioEngineBadge');
+            const tracksList = document.getElementById('audioTracksList');
+            const trackCount = document.getElementById('audioTrackCountBadge');
+
+            const hasActiveStream = Boolean(currentDirectUrl || currentStreamUrl);
+
+            if (!hasActiveStream) {
+                if (subtitle) subtitle.innerText = 'Audio Device & Codec Diagnostic';
+                if (codecEl) codecEl.innerText = '[AAC / OPUS Ready]';
+                if (containerEl) containerEl.innerText = '[WebAudio DSP]';
+                if (engineEl) {
+                    if (currentPlaybackEngine === 'transcode') {
+                        engineEl.innerText = 'Smart Transcode (AAC)';
+                        engineEl.className = 'px-2 py-0.5 rounded font-mono text-[11px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30';
+                    } else if (currentPlaybackEngine === 'vlc') {
+                        engineEl.innerText = 'External VLC';
+                        engineEl.className = 'px-2 py-0.5 rounded font-mono text-[11px] font-bold bg-orange-500/20 text-orange-300 border border-orange-500/30';
+                    } else {
+                        engineEl.innerText = 'Direct Web Stream';
+                        engineEl.className = 'px-2 py-0.5 rounded font-mono text-[11px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30';
+                    }
+                }
+                if (trackCount) trackCount.innerText = 'Default Track 0';
+                if (tracksList) {
+                    tracksList.innerHTML = `
+                        <div class="text-zinc-400 text-[11px] p-3 text-center font-mono bg-zinc-950/60 rounded-xl border border-white/5 space-y-1">
+                            <div class="font-bold text-zinc-300">Default: Audio Track 0 (Auto English / First Stream)</div>
+                            <div class="text-[10px] text-zinc-500">Live multi-track selection activates automatically during video playback</div>
+                        </div>
+                    `;
+                }
+            } else {
+                if (subtitle) subtitle.innerText = 'Stream Diagnostic & Tuning';
+            }
+        }
+
+        function testAudioOutput() {
+            try {
+                const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+                if (!AudioContextClass) {
+                    showToast("⚠️ WebAudio not supported in this browser", "warning");
+                    return;
+                }
+                if (!audioCtx) {
+                    audioCtx = new AudioContextClass();
+                }
+                if (audioCtx.state === 'suspended') {
+                    audioCtx.resume().catch(() => {});
+                }
+
+                const boostMultiplier = Math.max(1.0, parseFloat(currentVolumeBoostPercent) / 100.0);
+                const now = audioCtx.currentTime;
+
+                // Play melodious 3-tone chime (C5 = 523.25Hz, E5 = 659.25Hz, G5 = 783.99Hz)
+                const chordNotes = [523.25, 659.25, 783.99];
+                chordNotes.forEach((freq, idx) => {
+                    const osc = audioCtx.createOscillator();
+                    const noteGain = audioCtx.createGain();
+                    osc.type = 'sine';
+                    const startTime = now + idx * 0.08;
+                    osc.frequency.setValueAtTime(freq, startTime);
+
+                    const baseVol = 0.07 * boostMultiplier;
+                    noteGain.gain.setValueAtTime(baseVol, startTime);
+                    noteGain.gain.exponentialRampToValueAtTime(0.0001, startTime + 0.45);
+
+                    osc.connect(noteGain);
+                    noteGain.connect(audioCtx.destination);
+
+                    osc.start(startTime);
+                    osc.stop(startTime + 0.5);
+                });
+
+                showToast(`🔔 Audio Test: ${currentVolumeBoostPercent}% Boost • Profile: ${currentAudioProfile.toUpperCase()}`);
+            } catch (e) {
+                console.warn("Audio test error:", e);
+                showToast("⚠️ Audio Test Notice: " + (e.message || "Failed to initialize WebAudio"), "warning");
             }
         }
 
         function onVolumeBoostChange(percent) {
             currentVolumeBoostPercent = percent;
+            localStorage.setItem('playro_audio_boost', percent);
             const valEl = document.getElementById('volumeBoostVal');
             if (valEl) valEl.innerText = `${percent}%`;
 
@@ -2091,6 +2364,7 @@
 
         function setAudioProfile(profile) {
             currentAudioProfile = profile;
+            localStorage.setItem('playro_audio_profile', profile);
             initWebAudio();
             if (audioCtx) {
                 const t = audioCtx.currentTime;
@@ -2335,12 +2609,236 @@
             switchPlaybackEngine('transcode', true);
         }
 
+        function getCurrentPlaybackTime() {
+            const video = document.getElementById('videoElement');
+            if (!video) return 0;
+            if (currentPlaybackEngine === 'transcode') {
+                return (transcodeBaseOffset || 0) + (video.currentTime || 0);
+            }
+            return video.currentTime || 0;
+        }
+
+        function getTotalDuration() {
+            if (currentAudioProbeData && currentAudioProbeData.duration_seconds && currentAudioProbeData.duration_seconds > 0) {
+                return currentAudioProbeData.duration_seconds;
+            }
+            const video = document.getElementById('videoElement');
+            if (video && video.duration && !isNaN(video.duration) && isFinite(video.duration) && video.duration > 0) {
+                if (currentPlaybackEngine === 'transcode' && transcodeBaseOffset > 0) {
+                    return Math.max(video.duration, transcodeBaseOffset + video.currentTime);
+                }
+                return video.duration;
+            }
+            return 0;
+        }
+
+        function skipRelative(deltaSeconds) {
+            const cur = getCurrentPlaybackTime();
+            const dur = getTotalDuration();
+            let target = cur + deltaSeconds;
+            if (target < 0) target = 0;
+            if (dur > 0 && target > dur) target = dur;
+            seekToTime(target);
+        }
+
+        async function seekToTime(targetTime) {
+            targetTime = Math.max(0, Number(targetTime) || 0);
+            const video = document.getElementById('videoElement');
+            if (!video) return;
+
+            const curDisplay = document.getElementById('playerCurrentTimeDisplay');
+            const bar = document.getElementById('playerProgressBar');
+            if (curDisplay) curDisplay.innerText = formatTime(targetTime);
+            if (bar) bar.value = targetTime;
+
+            const target = currentDirectUrl || currentStreamUrl;
+
+            if (currentPlaybackEngine === 'transcode') {
+                transcodeBaseOffset = Math.max(0, targetTime);
+                const boostVal = (parseFloat(currentVolumeBoostPercent) / 100.0).toFixed(1);
+                const transcodeUrl = `${API_BASE}/stream/transcode?url=${encodeURIComponent(target)}&track=${selectedAudioTrackIndex}&ss=${Math.floor(targetTime)}&boost=${boostVal}`;
+                showToast(`⏩ Seeking to ${formatTime(transcodeBaseOffset)} (Smart Transcode)`);
+                await startPlayback(transcodeUrl, 0);
+                try {
+                    video.currentTime = 0;
+                } catch (e) {}
+                if (curDisplay) curDisplay.innerText = formatTime(transcodeBaseOffset);
+            } else {
+                // Direct playback engine
+                try {
+                    let seekFailed = false;
+                    const onSeekError = (e) => {
+                        seekFailed = true;
+                        video.removeEventListener('error', onSeekError);
+                        console.warn("Direct seek error on video element:", e);
+                        offerSwitchToTranscode(targetTime);
+                    };
+                    video.addEventListener('error', onSeekError, { once: true });
+
+                    video.currentTime = targetTime;
+                    showToast(`⏩ Seeked to ${formatTime(targetTime)}`);
+
+                    setTimeout(() => {
+                        if (!seekFailed) {
+                            video.removeEventListener('error', onSeekError);
+                        }
+                    }, 2000);
+                } catch (err) {
+                    console.warn("Direct seek exception thrown:", err);
+                    offerSwitchToTranscode(targetTime);
+                }
+            }
+        }
+
+        function offerSwitchToTranscode(targetTime) {
+            showToast(`⚠️ Direct seek unsupported. Switching to Smart Transcode at ${formatTime(targetTime)}...`, 'warning');
+            const badge = document.getElementById('playerStreamBadge');
+            if (badge) {
+                badge.innerHTML = `
+                    <span class="text-amber-400 font-mono text-xs">⚠️ Direct seek error at ${formatTime(targetTime)}</span>
+                    <button onclick="switchToTranscodeAtTime(${targetTime})" class="ml-2 px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs transition-colors shadow">
+                        🔄 Switch to Smart Transcode at ${formatTime(targetTime)}
+                    </button>
+                    <button onclick="openExternalVLC(currentDirectUrl || currentStreamUrl, ${targetTime})" class="ml-2 px-2.5 py-1 rounded bg-orange-600 hover:bg-orange-500 text-white font-bold text-xs transition-colors">
+                        ▲ Launch in VLC
+                    </button>
+                `;
+            }
+        }
+
+        async function switchToTranscodeAtTime(targetTime) {
+            currentPlaybackEngine = 'transcode';
+            localStorage.setItem('playro_default_audio_engine', 'transcode');
+            const engineBadge = document.getElementById('audioEngineBadge');
+            if (engineBadge) {
+                engineBadge.innerText = 'Smart Transcode (AAC)';
+                engineBadge.className = 'px-2 py-0.5 rounded font-mono text-[11px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30';
+            }
+            ['direct', 'transcode', 'vlc'].forEach(mode => {
+                const btn = document.getElementById(`engineBtn_${mode}`);
+                if (!btn) return;
+                if (mode === 'transcode') {
+                    btn.className = "w-full px-3 py-2 rounded-xl text-left text-xs font-semibold flex items-center justify-between border transition-all bg-white text-zinc-950 border-white shadow-sm";
+                } else {
+                    btn.className = "w-full px-3 py-2 rounded-xl text-left text-xs font-semibold flex items-center justify-between border transition-all bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border-white/10";
+                }
+            });
+            await seekToTime(targetTime);
+        }
+
+        function onScrubberInput(val) {
+            isUserScrubbing = true;
+            const curDisplay = document.getElementById('playerCurrentTimeDisplay');
+            if (curDisplay) curDisplay.innerText = formatTime(Number(val));
+            showControlsTemporarily();
+        }
+
+        function onScrubberChange(val) {
+            isUserScrubbing = false;
+            seekToTime(Number(val));
+            showControlsTemporarily();
+        }
+
+        function togglePlayPause() {
+            const video = document.getElementById('videoElement');
+            if (!video) return;
+            if (video.paused) {
+                video.play().catch(e => console.log("Play failed:", e));
+                updatePlayPauseButtonUI(false);
+            } else {
+                video.pause();
+                updatePlayPauseButtonUI(true);
+            }
+        }
+
+        function updatePlayPauseButtonUI(isPaused) {
+            const icon = document.getElementById('playerPlayPauseIcon');
+            const text = document.getElementById('playerPlayPauseText');
+            if (icon) icon.innerText = isPaused ? '▶' : '⏸';
+            if (text) text.innerText = isPaused ? 'Play' : 'Pause';
+        }
+
+        function toggleFullscreen() {
+            const overlay = document.getElementById('playerOverlay');
+            if (!overlay) return;
+            if (!document.fullscreenElement) {
+                if (overlay.requestFullscreen) {
+                    overlay.requestFullscreen().catch(err => console.log("Fullscreen request failed:", err));
+                } else if (overlay.webkitRequestFullscreen) {
+                    overlay.webkitRequestFullscreen();
+                }
+            } else {
+                if (document.exitFullscreen) {
+                    document.exitFullscreen().catch(err => console.log("Exit fullscreen failed:", err));
+                } else if (document.webkitExitFullscreen) {
+                    document.webkitExitFullscreen();
+                }
+            }
+        }
+
+        function showControlsTemporarily() {
+            const header = document.getElementById('playerHeaderBar');
+            const controls = document.getElementById('playerControlsContainer');
+            if (header) header.style.opacity = '1';
+            if (controls) controls.style.opacity = '1';
+
+            if (controlsHideTimeout) clearTimeout(controlsHideTimeout);
+            const video = document.getElementById('videoElement');
+            const panel = document.getElementById('audioControlPanel');
+            const isPanelOpen = panel && !panel.classList.contains('hidden');
+
+            if (video && !video.paused && !isPanelOpen) {
+                controlsHideTimeout = setTimeout(() => {
+                    if (header) header.style.opacity = '0';
+                    if (controls) controls.style.opacity = '0';
+                }, 4000);
+            }
+        }
+
+        function setupPlayerControlsAutoHide() {
+            const overlay = document.getElementById('playerOverlay');
+            if (!overlay) return;
+
+            overlay.addEventListener('mousemove', () => showControlsTemporarily());
+            overlay.addEventListener('touchstart', () => showControlsTemporarily(), { passive: true });
+        }
+
+        function initPlayerKeyboardListeners() {
+            document.addEventListener('keydown', (e) => {
+                const overlay = document.getElementById('playerOverlay');
+                if (!overlay || overlay.classList.contains('hidden')) return;
+
+                // Ignore when user is typing in a text field
+                if (['INPUT', 'TEXTAREA'].includes(e.target.tagName) && e.target.type !== 'range') {
+                    return;
+                }
+
+                if (e.key === 'ArrowLeft') {
+                    e.preventDefault();
+                    skipRelative(-10);
+                    showControlsTemporarily();
+                } else if (e.key === 'ArrowRight') {
+                    e.preventDefault();
+                    skipRelative(10);
+                    showControlsTemporarily();
+                } else if (e.code === 'Space' || e.key === ' ') {
+                    e.preventDefault();
+                    togglePlayPause();
+                    showControlsTemporarily();
+                } else if (e.key === 'f' || e.key === 'F') {
+                    e.preventDefault();
+                    toggleFullscreen();
+                    showControlsTemporarily();
+                }
+            });
+        }
+
         async function switchPlaybackEngine(engineMode, reload = true) {
             const video = document.getElementById('videoElement');
             const target = currentDirectUrl || currentStreamUrl;
-            if (!target) return;
 
             currentPlaybackEngine = engineMode;
+            localStorage.setItem('playro_default_audio_engine', engineMode);
 
             // Update 3 toggle buttons UI
             ['direct', 'transcode', 'vlc'].forEach(mode => {
@@ -2362,7 +2860,11 @@
                     engineBadge.className = 'px-2 py-0.5 rounded font-mono text-[11px] font-bold bg-orange-500/20 text-orange-300 border border-orange-500/30';
                 }
                 if (alertBanner) alertBanner.classList.add('hidden');
-                const currentTime = video ? (video.currentTime || 0) : 0;
+                if (!target) {
+                    showToast("▲ Default Engine set to VLC Player");
+                    return;
+                }
+                const currentTime = getCurrentPlaybackTime();
                 showToast("▲ Launching Hardware Bitstreaming in VLC...");
                 openExternalVLC(target, currentTime);
                 return;
@@ -2375,12 +2877,21 @@
                 }
                 if (alertBanner) alertBanner.classList.add('hidden');
 
+                if (!target) {
+                    showToast("🔄 Default Engine set to Smart Audio Transcode");
+                    return;
+                }
+
                 if (reload && video) {
-                    const currentTime = Math.floor(video.currentTime || 0);
+                    const currentTime = Math.floor(getCurrentPlaybackTime());
+                    transcodeBaseOffset = Math.max(0, currentTime);
                     const boostVal = (parseFloat(currentVolumeBoostPercent) / 100.0).toFixed(1);
                     const transcodeUrl = `${API_BASE}/stream/transcode?url=${encodeURIComponent(target)}&track=${selectedAudioTrackIndex}&ss=${currentTime}&boost=${boostVal}`;
                     showToast("🔄 Smart Audio Transcode Active (FFmpeg Copy + AAC Stereo)");
                     await startPlayback(transcodeUrl, 0);
+                    try { video.currentTime = 0; } catch (e) {}
+                    const curDisplay = document.getElementById('playerCurrentTimeDisplay');
+                    if (curDisplay) curDisplay.innerText = formatTime(transcodeBaseOffset);
                 }
             } else { // direct
                 if (engineBadge) {
@@ -2394,8 +2905,14 @@
                     else alertBanner.classList.add('hidden');
                 }
 
+                if (!target) {
+                    showToast("⚡ Default Engine set to Direct Web Stream");
+                    return;
+                }
+
                 if (reload && video) {
-                    const currentTime = video.currentTime || 0;
+                    const currentTime = getCurrentPlaybackTime();
+                    transcodeBaseOffset = 0;
                     showToast("⚡ Direct Web Stream Active");
                     await startPlayback(target, currentTime);
                 }
@@ -2409,6 +2926,9 @@
             currentMediaBadge = badge;
             currentStreamUrl = streamUrl;
             currentPlaybackEngine = 'direct';
+            transcodeBaseOffset = 0;
+            isUserScrubbing = false;
+            pendingDirectSeekTime = null;
             selectedAudioTrackIndex = 0;
 
             if (vlcModeEnabled) {
@@ -2449,11 +2969,16 @@
 
             const formatLabel = streamMeta.format || (streamMeta.is_mkv ? 'MKV (EBML)' : 'Direct Video Stream');
 
-            // If stream is unverified or invalid, do not hang in a black screen spinner
+            // Stream Verification Lock: Guard against launching raw unverified HTML gateways into VLC
             if (!streamMeta.valid || formatLabel.includes('Unknown') || formatLabel.includes('Invalid')) {
                 closeVideoPlayer();
-                showToast(`⚠️ In-browser stream verification offline. Launching directly in VLC...`);
-                openExternalVLC(directUrl || rawTarget || streamUrl);
+                const isPlayableMedia = directUrl && (directUrl.includes('.mkv') || directUrl.includes('.mp4') || directUrl.includes('.m3u8') || directUrl.includes('r2.cloudflarestorage') || directUrl.includes('pixeldrain') || directUrl.includes('workers.dev'));
+                if (isPlayableMedia) {
+                    showToast(`🚀 Auto-launching verified ${formatLabel} in VLC Player...`);
+                    openExternalVLC(directUrl);
+                } else {
+                    showToast(`⚠️ Stream Verification Lock: Direct media container unverified (${formatLabel}). Refusing unplayable launch.`, 5000);
+                }
                 return;
             }
 
@@ -2545,7 +3070,9 @@
             const overlay = document.getElementById('playerOverlay');
             const video = document.getElementById('videoElement');
             const panel = document.getElementById('audioControlPanel');
+            const backdrop = document.getElementById('audioModalBackdrop');
             if (panel) panel.classList.add('hidden');
+            if (backdrop) backdrop.classList.add('hidden');
             if (shakaPlayerInstance) {
                 shakaPlayerInstance.unload().catch(() => {});
             }
@@ -2554,12 +3081,27 @@
             video.load();
             overlay.classList.add('hidden');
             currentPlaybackEngine = 'direct';
+            transcodeBaseOffset = 0;
+            isUserScrubbing = false;
+            pendingDirectSeekTime = null;
+            if (controlsHideTimeout) {
+                clearTimeout(controlsHideTimeout);
+                controlsHideTimeout = null;
+            }
         }
 
         async function openExternalVLC(streamUrl, startTime = 0) {
             const target = streamUrl || currentStreamUrl || currentDirectUrl;
             if (!target) {
                 alert("No stream selected to play.");
+                return;
+            }
+
+            // Stream Verification Lock: Refuse to launch raw gateway URLs into VLC
+            const isGateway = /greenmotors|hdstream4u|driveseed|unblockedgames|thenaukriadda|video-seed|video-gen|homelander/i.test(target);
+            const isDirectMedia = /\.mkv|\.mp4|\.m3u8|\.webm|r2\.cloudflarestorage|pixeldrain|workers\.dev/i.test(target);
+            if (isGateway && !isDirectMedia) {
+                showToast(`⚠️ Stream Verification Lock: Gateway URL must be resolved to direct media before launching VLC.`, 5000);
                 return;
             }
 
@@ -3210,6 +3752,11 @@
         // 7. Spatial Navigation for Google TV / Xiaomi X Pro Remotes
         function initSpatialNavigation() {
             document.addEventListener('keydown', (e) => {
+                const overlay = document.getElementById('playerOverlay');
+                if (overlay && !overlay.classList.contains('hidden')) {
+                    // Player keyboard listener handles ArrowLeft / ArrowRight / Space / F during playback
+                    return;
+                }
                 const focusableElements = Array.from(document.querySelectorAll('.focusable, input, button'));
                 const active = document.activeElement;
                 let index = focusableElements.indexOf(active);

@@ -83,6 +83,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.middleware("http")
+async def add_no_cache_headers(request: Request, call_next):
+    response = await call_next(request)
+    path = request.url.path.lower()
+    if path == "/" or path.endswith(".html") or path.endswith(".js"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
 STATIC_DIR = os.path.join(CURRENT_DIR, "static")
 if os.path.exists(STATIC_DIR):
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -183,7 +193,15 @@ async def serve_ott_app():
     """Universal Cross-Platform OTT Global App (Windows, Android, Google TV, Web)."""
     index_path = os.path.join(STATIC_DIR, "index.html")
     if os.path.exists(index_path):
-        return FileResponse(index_path, media_type="text/html")
+        return FileResponse(
+            index_path,
+            media_type="text/html",
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+                "Pragma": "no-cache",
+                "Expires": "0"
+            }
+        )
     return RedirectResponse(url="/configure")
 
 @app.get("/manifest.webmanifest")
@@ -1349,8 +1367,17 @@ async def api_vlc_play(
                         "action": "interactive_popup_opened"
                     }, status_code=200)
                 else:
-                    # Fallback: attempt launching raw URL directly in VLC rather than blocking the user
-                    final_stream_url = resolved_res.get("direct_url") or raw_url
+                    # Stream Verification Lock: Refuse to launch raw gateway URLs or unverified HTML pages into VLC
+                    candidate_stream = resolved_res.get("direct_url") or raw_url
+                    is_gateway = any(gw in candidate_stream.lower() for gw in ["greenmotors", "hdstream4u", "driveseed", "unblockedgames", "thenaukriadda", "video-seed", "video-gen", "gadgetsweb", "duplichecker", "homelander", "hubcloud.ist/drive", "hubcloud.fans/drive"])
+                    is_media = any(ext in candidate_stream.lower() for ext in [".mkv", ".mp4", ".ts", ".m3u8", ".webm", ".avi", "r2.cloudflarestorage", "pixeldrain", "workers.dev"]) or candidate_stream.startswith("http://127.0.0.1") or candidate_stream.startswith("http://localhost")
+                    if is_gateway or not is_media:
+                        return JSONResponse({
+                            "status": "ERROR",
+                            "error": f"Stream Verification Lock: Gateway link could not be resolved to a direct media container ({err_msg}). Refusing to launch unplayable HTML in VLC.",
+                            "target_url": raw_url
+                        }, status_code=400)
+                    final_stream_url = candidate_stream
         except Exception as e:
             print(f"[VLC Resolve Warning] {e}")
             return JSONResponse({
@@ -1358,6 +1385,16 @@ async def api_vlc_play(
                 "error": f"Resolution error: {str(e)}",
                 "target_url": raw_url
             }, status_code=500)
+
+    # Final Stream Verification Gate: Refuse to spawn VLC on raw gateway HTML pages
+    is_gw = any(gw in final_stream_url.lower() for gw in ["greenmotors", "hdstream4u", "driveseed", "unblockedgames", "thenaukriadda", "video-seed", "video-gen", "gadgetsweb", "duplichecker", "homelander"])
+    is_direct_media = any(ext in final_stream_url.lower() for ext in [".mkv", ".mp4", ".ts", ".m3u8", ".webm", ".avi", "r2.cloudflarestorage", "pixeldrain", "workers.dev"]) or final_stream_url.startswith("http://127.0.0.1") or final_stream_url.startswith("http://localhost")
+    if is_gw and not is_direct_media:
+        return JSONResponse({
+            "status": "ERROR",
+            "error": "Stream Verification Lock: Cannot launch raw gateway webpage in VLC player. Direct media resolution required.",
+            "target_url": raw_url
+        }, status_code=400)
 
     # Launch VLC on Windows / Linux / macOS for the EXACT resolved stream
     vlc_bin = play_engine.vlc_path

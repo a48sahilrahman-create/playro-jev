@@ -62,6 +62,19 @@ def parse_audio_streams(probe_text: str, url: str = "") -> Dict[str, Any]:
 
     Handles TrueHD 7.1, AC-3 5.1, DTS, and AAC 2.0 / stereo along with metadata tags.
     """
+    duration_seconds: float = 0.0
+    duration_formatted: str = ""
+
+    dur_match = re.search(r'Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)', probe_text, re.IGNORECASE)
+    if dur_match:
+        h, m, s = dur_match.group(1), dur_match.group(2), dur_match.group(3)
+        duration_seconds = round(int(h) * 3600 + int(m) * 60 + float(s), 2)
+        h_val, m_val, s_val = int(h), int(m), int(float(s))
+        if h_val > 0:
+            duration_formatted = f"{h_val:02d}:{m_val:02d}:{s_val:02d}"
+        else:
+            duration_formatted = f"{m_val:02d}:{s_val:02d}"
+
     lines = probe_text.splitlines()
     audio_streams: List[Dict[str, Any]] = []
     current_stream: Optional[Dict[str, Any]] = None
@@ -178,6 +191,8 @@ def parse_audio_streams(probe_text: str, url: str = "") -> Dict[str, Any]:
         "stream_count": len(audio_streams),
         "codecs": unique_codecs,
         "languages": unique_languages,
+        "duration_seconds": duration_seconds,
+        "duration_formatted": duration_formatted,
         "browser_compatible": primary_compat and not has_incompatible,
         "primary_browser_compatible": primary_compat,
         "has_incompatible_audio": has_incompatible,
@@ -198,6 +213,8 @@ async def probe_audio_streams(url_or_content: str, timeout: float = 10.0) -> Dic
             "stream_count": 0,
             "codecs": [],
             "languages": [],
+            "duration_seconds": 0.0,
+            "duration_formatted": "",
             "browser_compatible": True,
             "has_incompatible_audio": False,
             "needs_transcode": False,
@@ -228,6 +245,8 @@ async def probe_audio_streams(url_or_content: str, timeout: float = 10.0) -> Dic
             "stream_count": 0,
             "codecs": [],
             "languages": [],
+            "duration_seconds": 0.0,
+            "duration_formatted": "",
             "browser_compatible": True,
             "has_incompatible_audio": False,
             "needs_transcode": False,

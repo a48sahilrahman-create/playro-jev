@@ -77,6 +77,10 @@
                 <button onclick="filterType('scifi')" class="nav-filter-btn focusable px-3 py-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-white/[0.06] transition-colors" tabindex="0">Sci-Fi</button>
                 <button onclick="filterType('action')" class="nav-filter-btn focusable px-3 py-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-white/[0.06] transition-colors" tabindex="0">Action</button>
                 <button onclick="filterType('top_rated')" class="nav-filter-btn focusable px-3 py-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-white/[0.06] transition-colors" tabindex="0">★ Top Rated</button>
+                <button onclick="openAddonsModal()" class="focusable px-3 py-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-white/[0.06] transition-colors flex items-center gap-1.5" tabindex="0">
+                    <span>🧩 Addons</span>
+                    <span id="addonsCountBadge" class="text-[10px] font-mono px-1.5 py-0.2 rounded bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">3</span>
+                </button>
                 <button onclick="openConfigModal()" class="focusable px-3 py-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-white/[0.06] transition-colors flex items-center gap-1.5" tabindex="0">
                     <span>⚡ Config</span>
                     <span id="configStatusBadge" class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
@@ -91,7 +95,7 @@
                 <input type="text" id="searchInput" placeholder="Search movies, series..."
                     class="focusable w-48 sm:w-64 md:w-80 bg-zinc-900/90 border border-white/10 rounded-full pl-9 pr-10 py-1.5 text-xs sm:text-sm text-zinc-100 placeholder-zinc-500 focus:w-80 md:focus:w-96 transition-all duration-300 font-medium shadow-inner"
                     tabindex="0"
-                    onkeydown="if(event.key==='Enter') executeSearch()">
+                    onkeydown="handleSearchInputKeydown(event)">
                 <svg class="absolute left-3 w-4 h-4 text-zinc-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
 
                 <!-- Mic Voice Search Button -->
@@ -99,6 +103,9 @@
                     class="focusable absolute right-1.5 p-1.5 rounded-full text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors" tabindex="0">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 02-3-3V5a3 3 0 116 0v6a3 3 0 02-3 3z"></path></svg>
                 </button>
+
+                <!-- Search Autocomplete Dropdown -->
+                <div id="searchAutocomplete" class="hidden absolute top-full left-0 right-0 mt-2 bg-zinc-900/95 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl overflow-hidden z-50 max-h-96 overflow-y-auto divide-y divide-white/5"></div>
             </div>
 
             <!-- VLC Mode Toggle Button -->
@@ -108,6 +115,11 @@
                 <span class="text-orange-400 font-bold">▲</span>
                 <span class="hidden sm:inline">VLC:</span>
                 <span id="vlcStateLabel" class="font-mono text-zinc-400 font-semibold">OFF</span>
+            </button>
+
+            <!-- Catalog Addons Quick Button -->
+            <button onclick="openAddonsModal()" class="focusable p-2 rounded-full text-zinc-400 hover:text-white hover:bg-zinc-800 border border-white/10 transition-colors" tabindex="0" title="Stremio Catalog Addons">
+                🧩
             </button>
 
             <!-- Quick Settings Button -->
@@ -178,6 +190,7 @@
                     <h2 id="searchResultsTitle" class="text-lg sm:text-xl font-black text-white tracking-tight flex items-center gap-2">
                         <span>Search Results</span>
                     </h2>
+                    <div id="searchSuggestionsBanner" class="hidden mt-2 flex flex-wrap items-center gap-2"></div>
                 </div>
                 <div class="flex items-center gap-2">
                     <span id="searchResultsCount" class="text-xs font-mono font-bold text-zinc-200 bg-zinc-800/90 px-3.5 py-1.5 rounded-xl border border-white/15 shadow-inner">0 Titles</span>
@@ -259,6 +272,7 @@
 
             <!-- Autoplay & Next Controls -->
             <div class="flex items-center gap-3">
+                <button id="audioPanelBtn" onclick="toggleAudioPanel()" class="px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 border border-zinc-600 text-white font-semibold text-xs flex items-center gap-1.5 transition-all shadow-sm">🎧 Audio &amp; Codecs</button>
                 <div class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-zinc-900/80 border border-white/10 text-xs text-zinc-300">
                     <label for="autoplayToggle" class="cursor-pointer">Autoplay Next Episode</label>
                     <input type="checkbox" id="autoplayToggle" checked class="w-3.5 h-3.5 accent-white rounded cursor-pointer">
@@ -272,6 +286,123 @@
 
         <!-- Video Element -->
         <video id="videoElement" class="w-full h-full max-h-screen object-contain" controls autoplay playsinline></video>
+
+        <!-- Slide-over / Floating Audio & Codec Studio Modal -->
+        <div id="audioControlPanel" class="hidden absolute top-20 right-4 sm:right-6 z-30 w-96 max-w-[calc(100vw-2rem)] max-h-[calc(100vh-6.5rem)] glass-panel bg-zinc-900/95 backdrop-blur-2xl rounded-2xl border border-white/10 shadow-2xl p-5 overflow-y-auto space-y-4 text-white text-xs hide-scrollbar transition-all duration-300">
+            <!-- Header -->
+            <div class="flex items-center justify-between pb-3 border-b border-white/10">
+                <div class="flex items-center gap-2">
+                    <span class="text-base">🎧</span>
+                    <div>
+                        <h4 class="font-bold text-sm tracking-tight text-white leading-none">Audio &amp; Codec Studio</h4>
+                        <span class="text-[10px] text-zinc-400 font-mono">Stream Diagnostic &amp; Tuning</span>
+                    </div>
+                </div>
+                <button onclick="toggleAudioPanel()" class="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white transition-colors" title="Close Panel">✕</button>
+            </div>
+
+            <!-- Live Codec Badges -->
+            <div class="space-y-1.5">
+                <span class="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider block font-mono">Live Codec Badges</span>
+                <div class="flex items-center gap-2 flex-wrap" id="audioCodecBadgesContainer">
+                    <span id="audioDetectedCodecBadge" class="px-2 py-0.5 rounded font-mono text-[11px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">[AAC 2.0]</span>
+                    <span id="audioContainerBadge" class="px-2 py-0.5 rounded font-mono text-[11px] font-bold bg-zinc-800 text-zinc-300 border border-white/10">[MP4]</span>
+                    <span id="audioEngineBadge" class="px-2 py-0.5 rounded font-mono text-[11px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">Direct Stream</span>
+                </div>
+            </div>
+
+            <!-- Silent Audio Alert Banner -->
+            <div id="silentAudioAlertBanner" class="hidden p-3 rounded-xl bg-amber-500/15 border border-amber-500/30 space-y-2">
+                <div class="flex items-start gap-2">
+                    <span class="text-amber-400 text-sm">⚠️</span>
+                    <div class="text-[11px] text-amber-200 leading-snug">
+                        <span class="font-bold" id="silentAudioCodecName">Dolby TrueHD / DTS / AC-3</span> audio detected. Browser Direct mode may output silent audio. Switch to Smart Transcode or VLC below.
+                    </div>
+                </div>
+                <div class="flex items-center gap-2 pt-1">
+                    <button onclick="switchPlaybackEngine('transcode')" class="flex-1 py-1.5 px-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[11px] text-center transition-colors shadow-sm">
+                        🔄 Smart Transcode
+                    </button>
+                    <button onclick="switchPlaybackEngine('vlc')" class="flex-1 py-1.5 px-2 rounded-lg bg-orange-600 hover:bg-orange-500 text-white font-bold text-[11px] text-center transition-colors shadow-sm">
+                        ▲ Launch in VLC
+                    </button>
+                </div>
+            </div>
+
+            <!-- Playback Engine Switcher (3 toggle buttons) -->
+            <div class="space-y-1.5">
+                <label class="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider block font-mono">Playback Engine</label>
+                <div class="grid grid-cols-1 gap-1.5">
+                    <button id="engineBtn_direct" onclick="switchPlaybackEngine('direct')" class="w-full px-3 py-2 rounded-xl text-left text-xs font-semibold flex items-center justify-between border transition-all bg-white text-zinc-950 border-white shadow-sm">
+                        <span class="flex items-center gap-2">
+                            <span>⚡</span>
+                            <span>Direct Web Stream</span>
+                        </span>
+                        <span class="text-[10px] font-mono opacity-80 font-bold">Original Bits</span>
+                    </button>
+                    <button id="engineBtn_transcode" onclick="switchPlaybackEngine('transcode')" class="w-full px-3 py-2 rounded-xl text-left text-xs font-semibold flex items-center justify-between border transition-all bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border-white/10">
+                        <span class="flex items-center gap-2">
+                            <span>🔄</span>
+                            <span>Smart Audio Transcode</span>
+                        </span>
+                        <span class="text-[10px] font-mono text-indigo-400 font-bold">FFmpeg Copy + AAC</span>
+                    </button>
+                    <button id="engineBtn_vlc" onclick="switchPlaybackEngine('vlc')" class="w-full px-3 py-2 rounded-xl text-left text-xs font-semibold flex items-center justify-between border transition-all bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border-white/10">
+                        <span class="flex items-center gap-2">
+                            <span>▲</span>
+                            <span>External VLC Player</span>
+                        </span>
+                        <span class="text-[10px] font-mono text-orange-400 font-bold">HW Bitstream</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Audio Track Selector -->
+            <div class="space-y-1.5">
+                <div class="flex items-center justify-between">
+                    <label class="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider font-mono">Audio Track Selector</label>
+                    <span id="audioTrackCountBadge" class="text-[10px] font-mono text-zinc-400">1 Track</span>
+                </div>
+                <div id="audioTracksList" class="space-y-1.5 max-h-40 overflow-y-auto pr-1 hide-scrollbar">
+                    <div class="text-zinc-500 text-[11px] py-2 text-center font-mono">Probing audio tracks...</div>
+                </div>
+            </div>
+
+            <!-- WebAudio Dialogue Booster & Equalizer -->
+            <div class="space-y-3 pt-2 border-t border-white/10">
+                <div class="flex items-center justify-between">
+                    <label class="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider font-mono">Dialogue Booster &amp; EQ</label>
+                    <span id="volumeBoostVal" class="text-[11px] font-mono font-bold text-emerald-400">100%</span>
+                </div>
+
+                <!-- Volume Boost Slider (100% to 300%) -->
+                <div class="space-y-1">
+                    <div class="flex items-center justify-between text-[10px] text-zinc-400">
+                        <span>Volume Boost</span>
+                        <span class="font-mono">100% – 300%</span>
+                    </div>
+                    <input type="range" id="volumeBoostSlider" min="100" max="300" step="5" value="100"
+                           oninput="onVolumeBoostChange(this.value)"
+                           class="w-full h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-emerald-500">
+                </div>
+
+                <!-- Profiles: Standard, Dialogue Clarity, Night Mode -->
+                <div class="space-y-1.5">
+                    <span class="text-[10px] text-zinc-400 font-mono">Sound Profiles</span>
+                    <div class="grid grid-cols-3 gap-1.5">
+                        <button id="profileBtn_standard" onclick="setAudioProfile('standard')" class="px-2 py-1.5 rounded-lg text-center text-[10px] font-bold border transition-all bg-white text-zinc-950 border-white shadow-sm">
+                            Standard
+                        </button>
+                        <button id="profileBtn_dialogue" onclick="setAudioProfile('dialogue')" class="px-2 py-1.5 rounded-lg text-center text-[10px] font-bold border transition-all bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border-white/10" title="+4dB voice boost via BiquadFilter">
+                            Dialogue Clarity
+                        </button>
+                        <button id="profileBtn_night" onclick="setAudioProfile('night')" class="px-2 py-1.5 rounded-lg text-center text-[10px] font-bold border transition-all bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border-white/10" title="DynamicsCompressorNode compression">
+                            Night Mode
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- PlayroDXC Universal 1-Click Configuration Modal -->
@@ -364,6 +495,58 @@
         </div>
     </div>
 
+    <!-- Stremio Catalog Addons Management Modal -->
+    <div id="addonsModal" class="hidden fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+        <div class="w-full max-w-2xl glass-panel rounded-3xl p-6 sm:p-8 shadow-2xl border border-white/10 space-y-6 max-h-[90vh] flex flex-col">
+            <!-- Header -->
+            <div class="flex items-center justify-between border-b border-white/[0.08] pb-4 flex-shrink-0">
+                <div class="flex items-center gap-3">
+                    <div class="h-9 w-9 rounded-xl bg-zinc-800 border border-white/10 flex items-center justify-center text-lg shadow-inner">
+                        🧩
+                    </div>
+                    <div>
+                        <h2 class="text-lg font-bold text-white tracking-tight">Stremio Catalog Addons</h2>
+                        <p class="text-xs text-zinc-400">Modular Metadata Extensions (Cinemeta, TMDB, CyberFlix, Kitsu)</p>
+                    </div>
+                </div>
+                <button onclick="closeAddonsModal()" class="text-zinc-400 hover:text-white p-1 rounded-lg">✕</button>
+            </div>
+
+            <!-- Addons List Container -->
+            <div id="addonsListContainer" class="flex-1 overflow-y-auto space-y-3 pr-1 hide-scrollbar max-h-[45vh]">
+                <div class="py-8 text-center text-zinc-500 font-mono text-xs">Loading addons...</div>
+            </div>
+
+            <!-- Section: Install Custom Addon -->
+            <div class="p-4 rounded-2xl bg-zinc-900/80 border border-white/[0.08] space-y-3 flex-shrink-0">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <div class="text-sm font-semibold text-white flex items-center gap-2">
+                            <span>➕ Install Custom Addon</span>
+                        </div>
+                        <p class="text-xs text-zinc-400 mt-0.5">Enter a Stremio manifest URL or stremio:// link to extend catalog metadata.</p>
+                    </div>
+                </div>
+                <div class="flex items-center gap-2">
+                    <input type="text" id="customAddonInput" placeholder="https://.../manifest.json or stremio://..."
+                        class="flex-1 bg-zinc-950 border border-white/10 rounded-xl px-3.5 py-2.5 text-xs text-zinc-200 placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-indigo-400 font-mono"
+                        onkeydown="if(event.key==='Enter') installCustomAddon()">
+                    <button id="installAddonBtn" onclick="installCustomAddon()" class="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs transition-colors flex items-center gap-1.5 flex-shrink-0">
+                        <span>Install Addon</span>
+                    </button>
+                </div>
+                <div id="addonInstallMsg" class="hidden text-xs font-mono"></div>
+            </div>
+
+            <!-- Footer Close -->
+            <div class="flex items-center justify-end gap-3 pt-2 border-t border-white/[0.08] flex-shrink-0">
+                <button onclick="closeAddonsModal()" class="px-5 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-bold text-xs transition-colors">
+                    Close
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- Script Application Logic -->
     <script>
         const API_BASE = window.location.origin.startsWith('http') ? window.location.origin : 'http://localhost:7860';
@@ -398,6 +581,18 @@
         let activeEpisodeNumber = 1;
         let activeSeriesTitle = '';
 
+        // WebAudio & Audio Codec Studio State
+        let audioCtx = null;
+        let audioSourceNode = null;
+        let biquadFilterNode = null;
+        let dynamicsCompressorNode = null;
+        let gainNode = null;
+        let currentAudioProfile = 'standard'; // 'standard', 'dialogue', 'night'
+        let currentPlaybackEngine = 'direct'; // 'direct', 'transcode', 'vlc'
+        let currentAudioProbeData = null;
+        let selectedAudioTrackIndex = 0;
+        let currentVolumeBoostPercent = 100;
+
         function showToast(message, type = 'info') {
             const container = document.getElementById('toastContainer');
             if (!container) return;
@@ -427,7 +622,10 @@
             initSpatialNavigation();
             initAutoplayListener();
             initPlaybackTimeTracker();
+            initAudioControlListeners();
             loadSavedConfig();
+            initSearchAutocomplete();
+            await loadInstalledAddons();
         });
 
         // 0. Shaka Player Initializer
@@ -533,7 +731,25 @@
 
         function playCurrentHero() {
             if (currentFeatured.length > 0 && currentFeatured[heroIndex]) {
-                executeSearchForTitle(currentFeatured[heroIndex].title);
+                const item = currentFeatured[heroIndex];
+                const isTv = Boolean(item.media_type === 'tv' || item.type === 'series' || item.is_series || item.type === 'tv');
+                let season = item.season;
+                let episode = item.episode;
+                if (isTv) {
+                    if (season === null || season === undefined) season = 1;
+                    if (episode === null || episode === undefined) episode = 1;
+                }
+                const mediaType = item.type || (isTv ? 'series' : 'movie');
+                executeSearchForTitle(
+                    item.title,
+                    season !== null && season !== undefined ? season : null,
+                    episode !== null && episode !== undefined ? episode : null,
+                    mediaType,
+                    item.poster || '',
+                    item.backdrop || item.poster || '',
+                    item.year || '',
+                    item.id || ''
+                );
             }
         }
 
@@ -553,11 +769,19 @@
             grid.innerHTML = items.map((item, idx) => {
                 const safeTitle = (item.title || '').replace(/'/g, "\\'");
                 const posterUrl = item.poster || 'https://placehold.co/300x450/18181b/52525b?text=PLAYRO';
-                const catLabel = item.category || (item.type === 'series' ? 'TV Series' : 'Movie');
+                const isTv = Boolean(item.media_type === 'tv' || item.type === 'series' || item.is_series || item.type === 'tv');
+                const catLabel = item.category || (isTv ? 'TV Series' : 'Movie');
+                let season = item.season;
+                let episode = item.episode;
+                if (isTv) {
+                    if (season === null || season === undefined) season = 1;
+                    if (episode === null || episode === undefined) episode = 1;
+                }
+                const mediaType = item.type || (isTv ? 'series' : 'movie');
                 return `
                 <div class="focusable group relative rounded-xl overflow-hidden bg-zinc-900 border border-white/[0.08] hover:border-white/20 transition-all duration-300 cursor-pointer shadow-lg hover:shadow-2xl hover:scale-[1.02]"
                      tabindex="0"
-                     onclick="executeSearchForTitle('${safeTitle}', null, null, '${item.type || ''}', '${posterUrl.replace(/'/g, "\\'")}', '${(item.backdrop || posterUrl).replace(/'/g, "\\'")}')">
+                     onclick="executeSearchForTitle('${safeTitle}', ${season !== null && season !== undefined ? season : 'null'}, ${episode !== null && episode !== undefined ? episode : 'null'}, '${mediaType}', '${posterUrl.replace(/'/g, "\\'")}', '${(item.backdrop || posterUrl).replace(/'/g, "\\'")}', '${item.year || ''}', '${item.id || ''}')">
                     <div class="aspect-[2/3] w-full bg-cover bg-center transition-transform duration-500 group-hover:scale-105"
                          style="background-image: url('${posterUrl}');">
                     </div>
@@ -592,18 +816,199 @@
             window.scrollTo({ top: 0, behavior: 'smooth' });
         }
 
-        // Listen for ESC key to close full-page detail view
+        // Listen for ESC key to close modals and full-page detail view
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
+                const addonsModal = document.getElementById('addonsModal');
+                if (addonsModal && !addonsModal.classList.contains('hidden')) {
+                    closeAddonsModal();
+                    return;
+                }
+                const configModal = document.getElementById('configModal');
+                if (configModal && !configModal.classList.contains('hidden')) {
+                    closeConfigModal();
+                    return;
+                }
                 const detailView = document.getElementById('mediaDetailView');
-                if (!detailView.classList.contains('hidden')) {
+                if (detailView && !detailView.classList.contains('hidden')) {
                     closeDetailView();
                 }
             }
         });
 
+        // Search Autocomplete & Typeahead State
+        let searchDebounceTimer = null;
+        let autocompleteAbortController = null;
+        let currentAutocompleteItems = [];
+
+        function handleSearchInputKeydown(e) {
+            if (e.key === 'Enter') {
+                closeAutocomplete();
+                executeSearch();
+            } else if (e.key === 'ArrowDown') {
+                const autoBox = document.getElementById('searchAutocomplete');
+                if (autoBox && !autoBox.classList.contains('hidden')) {
+                    const first = autoBox.querySelector('.focusable');
+                    if (first) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        first.focus();
+                    }
+                }
+            } else if (e.key === 'Escape') {
+                closeAutocomplete();
+            }
+        }
+
+        function handleAutocompleteItemKeydown(e, index) {
+            if (e.key === 'Enter') {
+                selectAutocompleteByIndex(index);
+            } else if (e.key === 'Escape') {
+                closeAutocomplete();
+                document.getElementById('searchInput')?.focus();
+            } else if (e.key === 'ArrowUp' && index === 0) {
+                e.preventDefault();
+                e.stopPropagation();
+                document.getElementById('searchInput')?.focus();
+            }
+        }
+
+        function closeAutocomplete() {
+            const autoBox = document.getElementById('searchAutocomplete');
+            if (autoBox) {
+                autoBox.classList.add('hidden');
+                autoBox.innerHTML = '';
+            }
+            currentAutocompleteItems = [];
+        }
+
+        function selectAutocompleteByIndex(index) {
+            const item = currentAutocompleteItems[index];
+            if (!item) return;
+            const input = document.getElementById('searchInput');
+            if (input) input.value = item.title || '';
+            closeAutocomplete();
+            const isTv = Boolean(item.media_type === 'tv' || item.type === 'series' || item.is_series || item.type === 'tv');
+            let season = item.season;
+            let episode = item.episode;
+            if (isTv) {
+                if (season === null || season === undefined) season = 1;
+                if (episode === null || episode === undefined) episode = 1;
+            }
+            const mediaType = item.type || (isTv ? 'series' : 'movie');
+            executeSearchForTitle(
+                item.title,
+                season !== null && season !== undefined ? season : null,
+                episode !== null && episode !== undefined ? episode : null,
+                mediaType,
+                item.poster || '',
+                item.backdrop || item.poster || '',
+                item.year || '',
+                item.id || ''
+            );
+        }
+
+        function renderAutocompleteDropdown(items) {
+            const autoBox = document.getElementById('searchAutocomplete');
+            if (!autoBox) return;
+
+            currentAutocompleteItems = items;
+            autoBox.innerHTML = items.map((item, index) => {
+                const posterUrl = item.poster || 'https://placehold.co/300x450/18181b/52525b?text=PLAYRO';
+                const isTv = item.type === 'series';
+                const badgeText = isTv ? 'TV SERIES' : 'MOVIE';
+                const badgeColor = isTv ? 'bg-indigo-500/20 text-indigo-400 border-indigo-500/30' : 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30';
+                const displayYear = item.year || '';
+                const ratingStr = item.rating ? `★ ${item.rating}` : '';
+                const catLabel = item.category || (isTv ? 'Series' : 'Movie');
+
+                return `
+                    <div class="focusable flex items-center gap-3 px-3.5 py-2.5 hover:bg-white/[0.08] focus:bg-white/[0.15] transition-colors cursor-pointer text-left w-full outline-none"
+                         tabindex="0"
+                         role="option"
+                         onclick="selectAutocompleteByIndex(${index})"
+                         onkeydown="handleAutocompleteItemKeydown(event, ${index})">
+                        <div class="w-9 h-12 rounded-lg bg-zinc-800 bg-cover bg-center flex-shrink-0 border border-white/10"
+                             style="background-image: url('${posterUrl.replace(/'/g, "\\'")}');"></div>
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center justify-between gap-2">
+                                <span class="text-xs font-bold text-white truncate">${item.title}</span>
+                                <span class="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded border ${badgeColor} flex-shrink-0">${badgeText}</span>
+                            </div>
+                            <div class="flex items-center gap-2 text-[10px] font-mono text-zinc-400 mt-0.5">
+                                ${displayYear ? `<span>${displayYear}</span>` : ''}
+                                ${ratingStr ? `<span class="text-amber-400 font-bold">${ratingStr}</span>` : ''}
+                                ${catLabel ? `<span class="truncate">${catLabel}</span>` : ''}
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            autoBox.classList.remove('hidden');
+        }
+
+        function initSearchAutocomplete() {
+            const input = document.getElementById('searchInput');
+            const autoBox = document.getElementById('searchAutocomplete');
+            if (!input || !autoBox) return;
+
+            input.addEventListener('input', (e) => {
+                const val = e.target.value.trim();
+                clearTimeout(searchDebounceTimer);
+
+                if (val.length < 2) {
+                    closeAutocomplete();
+                    return;
+                }
+
+                searchDebounceTimer = setTimeout(async () => {
+                    if (autocompleteAbortController) {
+                        autocompleteAbortController.abort();
+                    }
+                    autocompleteAbortController = new AbortController();
+
+                    try {
+                        const res = await fetch(`${API_BASE}/api/catalog/search?q=${encodeURIComponent(val)}`, {
+                            signal: autocompleteAbortController.signal
+                        });
+                        if (!res.ok) return;
+                        const data = await res.json();
+                        const items = (data.results || []).slice(0, 5);
+
+                        if (items.length === 0) {
+                            closeAutocomplete();
+                            return;
+                        }
+
+                        renderAutocompleteDropdown(items);
+                    } catch (err) {
+                        if (err.name !== 'AbortError') {
+                            console.warn('Autocomplete fetch error:', err);
+                        }
+                    }
+                }, 200);
+            });
+
+            // Close on outside click
+            document.addEventListener('click', (e) => {
+                const container = input.parentElement;
+                if (container && !container.contains(e.target)) {
+                    closeAutocomplete();
+                }
+            });
+
+            // Close on Escape
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    closeAutocomplete();
+                }
+            });
+        }
+
         // 2. Search & Stream Discovery Execution (Multi-Title Discovery Grid + Dedicated Detail View)
         async function executeSearch() {
+            closeAutocomplete();
             const q = document.getElementById('searchInput').value.trim();
             if (!q) {
                 clearSearch();
@@ -625,12 +1030,17 @@
             const searchTitle = document.getElementById('searchResultsTitle');
             const searchCount = document.getElementById('searchResultsCount');
             const searchGrid = document.getElementById('searchResultsGrid');
+            const sugBanner = document.getElementById('searchSuggestionsBanner');
 
             if (!searchSec || !searchGrid) return;
 
             searchSec.classList.remove('hidden');
             searchTitle.innerHTML = `<span>Search Results for "<span class="text-amber-400">${q}</span>"</span>`;
             searchCount.innerText = 'Searching...';
+            if (sugBanner) {
+                sugBanner.innerHTML = '';
+                sugBanner.classList.add('hidden');
+            }
 
             // High-craft shimmer loading skeleton
             searchGrid.innerHTML = Array.from({ length: 6 }).map(() => `
@@ -652,15 +1062,42 @@
 
                 searchCount.innerText = `${results.length} Titles Found`;
 
+                // If few or zero results, render clickable suggestions chips
+                if (data.suggestions && data.suggestions.length > 0 && sugBanner && results.length <= 3) {
+                    const chips = data.suggestions.map(s => {
+                        const safeS = s.replace(/'/g, "\\'");
+                        return `<button onclick="document.getElementById('searchInput').value='${safeS}'; executeSearch();" class="focusable px-2.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-xs font-semibold transition-all cursor-pointer shadow-sm active:scale-95" tabindex="0">${s}</button>`;
+                    }).join(' ');
+                    sugBanner.innerHTML = `<span class="text-xs font-medium text-zinc-400">Did you mean:</span> ${chips}`;
+                    sugBanner.classList.remove('hidden');
+                }
+
                 if (results.length === 0) {
+                    let suggestionsHtml = '';
+                    if (data.suggestions && data.suggestions.length > 0) {
+                        const chips = data.suggestions.map(s => {
+                            const safeS = s.replace(/'/g, "\\'");
+                            return `<button onclick="document.getElementById('searchInput').value='${safeS}'; executeSearch();" class="focusable px-3 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-xs font-semibold transition-all cursor-pointer shadow-sm active:scale-95" tabindex="0">${s}</button>`;
+                        }).join(' ');
+                        suggestionsHtml = `
+                            <div class="mt-4 flex flex-wrap items-center justify-center gap-2">
+                                <span class="text-xs font-medium text-zinc-400">Did you mean:</span>
+                                ${chips}
+                            </div>
+                        `;
+                    }
+
                     searchGrid.innerHTML = `
                         <div class="col-span-full py-16 text-center space-y-3">
                             <div class="text-3xl">🔍</div>
                             <h4 class="text-sm font-bold text-zinc-300 font-mono">No matching movies, series, or anime found for "${q}"</h4>
                             <p class="text-xs text-zinc-500">Try searching for alternative spellings or popular keywords.</p>
-                            <button onclick="clearSearch()" class="px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 border border-white/10 text-xs font-bold text-white transition-colors">
-                                Return to Browse
-                            </button>
+                            ${suggestionsHtml}
+                            <div class="pt-2">
+                                <button onclick="clearSearch()" class="focusable px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 border border-white/10 text-xs font-bold text-white transition-colors" tabindex="0">
+                                    Return to Browse
+                                </button>
+                            </div>
                         </div>
                     `;
                     return;
@@ -671,15 +1108,22 @@
                     const safeTitle = (item.title || '').replace(/'/g, "\\'");
                     const posterUrl = item.poster || 'https://placehold.co/300x450/18181b/52525b?text=PLAYRO';
                     const backdropUrl = (item.backdrop || posterUrl).replace(/'/g, "\\'");
-                    const isTv = item.type === 'series';
+                    const isTv = Boolean(item.media_type === 'tv' || item.type === 'series' || item.is_series || item.type === 'tv');
                     const catLabel = item.category || (isTv ? 'TV Series' : 'Movie');
                     const badgeText = isTv ? 'TV SERIES' : 'MOVIE';
                     const badgeColor = isTv ? 'bg-indigo-500/20 text-indigo-400 border-indigo-500/30' : 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30';
+                    let season = item.season;
+                    let episode = item.episode;
+                    if (isTv) {
+                        if (season === null || season === undefined) season = 1;
+                        if (episode === null || episode === undefined) episode = 1;
+                    }
+                    const mediaType = item.type || (isTv ? 'series' : 'movie');
 
                     return `
                     <div class="focusable group relative rounded-xl overflow-hidden bg-zinc-900 border border-white/[0.08] hover:border-white/30 transition-all duration-300 cursor-pointer shadow-lg hover:shadow-2xl hover:scale-[1.02]"
                          tabindex="0"
-                         onclick="executeSearchForTitle('${safeTitle}', null, null, '${item.type || ''}', '${posterUrl.replace(/'/g, "\\'")}', '${backdropUrl}')">
+                         onclick="executeSearchForTitle('${safeTitle}', ${season !== null && season !== undefined ? season : 'null'}, ${episode !== null && episode !== undefined ? episode : 'null'}, '${mediaType}', '${posterUrl.replace(/'/g, "\\'")}', '${backdropUrl}', '${item.year || ''}', '${item.id || ''}')">
                         <div class="aspect-[2/3] w-full bg-cover bg-center transition-transform duration-500 group-hover:scale-105"
                              style="background-image: url('${posterUrl}');">
                         </div>
@@ -713,8 +1157,14 @@
         }
 
         function clearSearch() {
+            closeAutocomplete();
             const input = document.getElementById('searchInput');
             if (input) input.value = '';
+            const sugBanner = document.getElementById('searchSuggestionsBanner');
+            if (sugBanner) {
+                sugBanner.innerHTML = '';
+                sugBanner.classList.add('hidden');
+            }
             document.getElementById('searchResultsSection')?.classList.add('hidden');
             document.getElementById('heroSection')?.classList.remove('hidden');
             document.getElementById('trendingCatalogSection')?.classList.remove('hidden');
@@ -722,7 +1172,25 @@
             window.scrollTo({ top: 0, behavior: 'smooth' });
         }
 
-        async function executeSearchForTitle(title, preferredSeason = null, preferredEpisode = null, mediaType = null, explicitPoster = '', explicitBackdrop = '') {
+        async function executeSearchForTitle(title, preferredSeason = null, preferredEpisode = null, mediaType = null, explicitPoster = '', explicitBackdrop = '', explicitYear = '', explicitId = '') {
+            // Overload detection: if called as executeSearchForTitle(title, year, season, episode)
+            if ((typeof preferredSeason === 'number' && preferredSeason > 1900) ||
+                (typeof preferredSeason === 'string' && /^(19|20)\d{2}$/.test(String(preferredSeason).trim()))) {
+                explicitYear = String(preferredSeason).trim();
+                const actualSeason = preferredEpisode;
+                const actualEpisode = mediaType;
+                preferredSeason = actualSeason;
+                preferredEpisode = actualEpisode;
+                mediaType = 'series';
+            }
+
+            // TV series defaults: if media_type is tv/series, ensure season and episode default to 1
+            const isTvType = mediaType === 'tv' || mediaType === 'series';
+            if (isTvType) {
+                if (preferredSeason === null || preferredSeason === undefined) preferredSeason = 1;
+                if (preferredEpisode === null || preferredEpisode === undefined) preferredEpisode = 1;
+            }
+
             openDetailView();
             const container = document.getElementById('detailCanvasContainer');
             const badgeTypeEl = document.getElementById('detailBadgeType');
@@ -757,11 +1225,34 @@
                 if (preferredSeason !== null && preferredEpisode !== null) {
                     urlParam += `&season=${preferredSeason}&episode=${preferredEpisode}`;
                 }
+                if (explicitYear) urlParam += `&year=${encodeURIComponent(explicitYear)}`;
+                if (explicitId) urlParam += `&imdb_id=${encodeURIComponent(explicitId)}`;
 
                 const res = await fetch(urlParam);
                 const data = await res.json();
-                const rawReleases = data.releases || [];
+                let rawReleases = data.releases || [];
                 const meta = data.meta || {};
+
+                // Post-resolution check: if metadata identifies item as series, guarantee season & episode default to 1
+                const isMetaSeries = (meta.type === 'series' || meta.type === 'tv' || mediaType === 'series' || mediaType === 'tv') && ((meta.seasons && meta.seasons.length > 0) || (meta.episodes && meta.episodes.length > 0));
+                if (isMetaSeries && (preferredSeason === null || preferredSeason === undefined || preferredEpisode === null || preferredEpisode === undefined)) {
+                    preferredSeason = 1;
+                    preferredEpisode = 1;
+                    if (!mediaType) mediaType = 'series';
+                    try {
+                        const refineUrl = `${API_BASE}/api/search?q=${encodeURIComponent(meta.title || title)}&type=series&season=1&episode=1${explicitYear ? `&year=${encodeURIComponent(explicitYear)}` : ''}${explicitId ? `&imdb_id=${encodeURIComponent(explicitId)}` : ''}`;
+                        const refineRes = await fetch(refineUrl);
+                        if (refineRes.ok) {
+                            const refineData = await refineRes.json();
+                            if (refineData.releases && refineData.releases.length > 0) {
+                                rawReleases = refineData.releases;
+                            }
+                        }
+                    } catch (refineErr) {
+                        console.warn("Series refinement notice:", refineErr);
+                    }
+                }
+
                 const releases = sortReleasesByQualityAndSize(rawReleases);
                 currentSearchReleases = releases;
                 activeSeriesMeta = meta;
@@ -769,7 +1260,7 @@
                 activeSeasonNumber = Number(preferredSeason || 1);
                 activeEpisodeNumber = Number(preferredEpisode || 1);
 
-                const isTvSeries = (meta.type === 'series' || mediaType === 'series') && meta.seasons && meta.seasons.length > 0;
+                const isTvSeries = (meta.type === 'series' || meta.type === 'tv' || mediaType === 'series' || mediaType === 'tv') && meta.seasons && meta.seasons.length > 0;
                 badgeTypeEl.innerText = isTvSeries ? 'TV Series' : 'Movie';
 
                 const posterUrl = explicitPoster || meta.poster || 'https://placehold.co/300x450/18181b/52525b?text=PLAYRO';
@@ -830,7 +1321,7 @@
                 container.innerHTML = heroDetailHtml + streamsMountHtml;
 
                 const selectedEpObj = (meta.episodes || []).find(e => Number(e.season) === activeSeasonNumber && Number(e.episode) === activeEpisodeNumber);
-                const episodeTitleLabel = selectedEpObj ? `Season ${activeSeasonNumber} Episode ${activeEpisodeNumber}: "${selectedEpObj.title}"` : cleanDisplayTitle;
+                const episodeTitleLabel = selectedEpObj ? `Season ${activeSeasonNumber} Episode ${activeEpisodeNumber}: "${selectedEpObj.title}"` : (isTvSeries ? `${cleanDisplayTitle} • S${activeSeasonNumber}E${activeEpisodeNumber}` : cleanDisplayTitle);
 
                 renderStreamsList(releases, episodeTitleLabel, posterUrl);
 
@@ -1113,14 +1604,25 @@
                 const audio = r.audio || '';
                 const platform = normalizePlatform(r.platform || r.source || 'Cloud');
                 const rawTarget = r.target_url || r.direct_url || '';
-                const streamUrl = `${API_BASE}/playback/resolve?url=${encodeURIComponent(rawTarget)}&title=${encodeURIComponent(r.title || currentDetailLabelTitle)}`;
-                const safeTitle = (r.title || currentDetailLabelTitle).replace(/'/g, "\\'");
+
+                let cleanDisplayTitle = (r.title && r.title.length > 3) ? r.title : currentDetailLabelTitle;
+                cleanDisplayTitle = cleanDisplayTitle.replace(/\|\s*\[ALL\s*Episodes\]\s*\|?/gi, '')
+                                                     .replace(/\[ALL\s*Episodes\]/gi, '')
+                                                     .replace(/\|\s*Full\s*Season\s*\|?/gi, '')
+                                                     .replace(/\|\s*\[Batch(?:\/Zip)?\]\s*\|?/gi, '')
+                                                     .replace(/\[Batch(?:\/Zip)?\]/gi, '')
+                                                     .replace(/\s{2,}/g, ' ').trim();
+                const cardDisplayTitle = cleanDisplayTitle || currentDetailLabelTitle;
+
+                const streamUrl = `${API_BASE}/playback/resolve?url=${encodeURIComponent(rawTarget)}&title=${encodeURIComponent(cardDisplayTitle)}`;
+                const safeTitle = cardDisplayTitle.replace(/'/g, "\\'");
                 const safeStreamUrl = streamUrl.replace(/'/g, "\\'");
                 const safeRawTarget = rawTarget.replace(/'/g, "\\'");
                 const safePoster = (currentDetailPosterUrl || activeSeriesMeta?.poster || '').replace(/'/g, "\\'");
 
-                const cardDisplayTitle = (r.title && r.title.length > 3) ? r.title : currentDetailLabelTitle;
                 const escapedDisplayTitle = cardDisplayTitle.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+                const escapedLabel = r.label ? r.label.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;') : '';
+                const escapedEpTag = r.episode_tag ? r.episode_tag.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;') : '';
 
                 const topQualityBadgeText = displaySize ? `${resBadge} • ${displaySize}` : resBadge;
 
@@ -1139,9 +1641,13 @@
                             </div>` : ''}
 
                             <div class="flex items-center justify-between gap-2 mb-2">
-                                <span class="text-xs font-mono font-black px-2.5 py-0.5 rounded-lg ${isTopCard ? 'bg-amber-400/20 text-amber-300 border border-amber-400/40' : 'bg-zinc-800 text-white border border-white/10 group-hover:border-white/30'}">${resBadge}</span>
+                                <div class="flex items-center gap-1.5 flex-wrap">
+                                    <span class="text-xs font-mono font-black px-2.5 py-0.5 rounded-lg ${isTopCard ? 'bg-amber-400/20 text-amber-300 border border-amber-400/40' : 'bg-zinc-800 text-white border border-white/10 group-hover:border-white/30'}">${resBadge}</span>
+                                    ${escapedEpTag ? `<span class="text-xs font-mono font-black px-2 py-0.5 rounded-lg bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 uppercase tracking-wide">${escapedEpTag}</span>` : ''}
+                                </div>
                                 <span class="text-[11px] font-mono text-zinc-400 font-semibold">${platform}</span>
                             </div>
+                            ${escapedLabel ? `<div class="text-xs font-mono font-bold text-amber-300/90 truncate mb-1" title="${escapedLabel}">${escapedLabel}</div>` : ''}
                             <h4 class="text-xs font-bold text-zinc-200 line-clamp-2 mb-2 group-hover:text-white" title="${escapedDisplayTitle}">${escapedDisplayTitle}</h4>
                             <div class="text-[11px] text-zinc-400 font-mono flex items-center gap-2 mb-3">
                                 <span class="${isTopCard ? 'text-amber-400 font-black' : 'text-emerald-400 font-bold'}">${displaySize}</span>
@@ -1232,7 +1738,7 @@
                 `;
             }).join('');
 
-            const episodesGridHtml = episodes.map(ep => {
+            let episodesGridHtml = episodes.map(ep => {
                 const isSelected = Number(ep.episode) === Number(activeEpisodeNumber);
                 const borderClass = isSelected
                     ? "border-white bg-zinc-800 shadow-xl ring-2 ring-white/30"
@@ -1264,6 +1770,26 @@
                 `;
             }).join('');
 
+            if (episodes.length === 0) {
+                const fallbackEps = Array.from({ length: 12 }, (_, i) => i + 1);
+                episodesGridHtml = fallbackEps.map(epNum => {
+                    const isSelected = Number(epNum) === Number(activeEpisodeNumber);
+                    const borderClass = isSelected
+                        ? "border-white bg-zinc-800 shadow-xl ring-2 ring-white/30 text-white font-bold"
+                        : "border-white/10 hover:border-white/30 bg-zinc-900/80 text-zinc-300";
+                    const safeSeriesTitle = (meta.title || '').replace(/'/g, "\\'");
+                    return `
+                        <div id="epCard_${activeSeasonNumber}_${epNum}"
+                             class="focusable rounded-2xl border p-4 cursor-pointer transition-all flex items-center justify-between ${borderClass} group"
+                             tabindex="0"
+                             onclick="selectSeriesEpisode('${safeSeriesTitle}', ${activeSeasonNumber}, ${epNum})">
+                            <span class="text-xs font-mono font-bold">Episode ${epNum}</span>
+                            <span class="text-xs ${isSelected ? 'text-emerald-400' : 'text-zinc-500 group-hover:text-white'}">▶ ${isSelected ? 'Active' : 'Select'}</span>
+                        </div>
+                    `;
+                }).join('');
+            }
+
             return `
                 <div id="seriesPickerSection" class="relative z-10 border-t border-white/[0.12] pt-6 mt-6 space-y-4">
                     <div class="flex items-center justify-between flex-wrap gap-3">
@@ -1275,7 +1801,7 @@
                                 <span>▲</span>
                                 <span>Play Season in VLC (Autoplay All)</span>
                             </button>
-                            <span class="text-xs font-mono text-zinc-200 font-semibold bg-zinc-900/90 px-3.5 py-1.5 rounded-xl border border-white/15 shadow-inner">${episodes.length} Episodes in Season ${activeSeasonNumber}</span>
+                            <span class="text-xs font-mono text-zinc-200 font-semibold bg-zinc-900/90 px-3.5 py-1.5 rounded-xl border border-white/15 shadow-inner">${episodes.length > 0 ? episodes.length : 12} Episodes in Season ${activeSeasonNumber}</span>
                         </div>
                     </div>
 
@@ -1438,7 +1964,15 @@
             }
 
             try {
-                const res = await fetch(`${API_BASE}/api/search?q=${encodeURIComponent(seriesTitle)}&type=series&season=${seasonNum}&episode=${episodeNum}`);
+                let searchUrl = `${API_BASE}/api/search?q=${encodeURIComponent(seriesTitle)}&type=series&season=${seasonNum}&episode=${episodeNum}`;
+                if (activeSeriesMeta?.year) {
+                    searchUrl += `&year=${encodeURIComponent(activeSeriesMeta.year)}`;
+                }
+                const imdbId = activeSeriesMeta?.imdb_id || activeSeriesMeta?.id;
+                if (imdbId) {
+                    searchUrl += `&imdb_id=${encodeURIComponent(imdbId)}`;
+                }
+                const res = await fetch(searchUrl);
                 const data = await res.json();
                 const rawReleases = data.releases || [];
                 const releases = sortReleasesByQualityAndSize(rawReleases);
@@ -1474,12 +2008,408 @@
             document.getElementById('searchSection').classList.add('hidden');
         }
 
+        // Audio & Codec Studio Engine & WebAudio Graph
+        function initAudioControlListeners() {
+            const video = document.getElementById('videoElement');
+            if (video) {
+                video.addEventListener('play', () => initWebAudio());
+            }
+        }
+
+        function initWebAudio() {
+            const video = document.getElementById('videoElement');
+            if (!video) return;
+
+            if (!audioCtx) {
+                const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+                if (!AudioContextClass) return;
+                audioCtx = new AudioContextClass();
+            }
+
+            if (!audioSourceNode && audioCtx) {
+                try {
+                    audioSourceNode = audioCtx.createMediaElementSource(video);
+
+                    // BiquadFilterNode (Dialogue clarity voice boost peaking at 2.5kHz)
+                    biquadFilterNode = audioCtx.createBiquadFilter();
+                    biquadFilterNode.type = 'peaking';
+                    biquadFilterNode.frequency.setValueAtTime(2500, audioCtx.currentTime);
+                    biquadFilterNode.Q.setValueAtTime(1.2, audioCtx.currentTime);
+                    biquadFilterNode.gain.setValueAtTime(0, audioCtx.currentTime);
+
+                    // DynamicsCompressorNode (dynamic range compressor for Night Mode)
+                    dynamicsCompressorNode = audioCtx.createDynamicsCompressor();
+                    dynamicsCompressorNode.threshold.setValueAtTime(-24, audioCtx.currentTime);
+                    dynamicsCompressorNode.knee.setValueAtTime(30, audioCtx.currentTime);
+                    dynamicsCompressorNode.ratio.setValueAtTime(1.0, audioCtx.currentTime);
+                    dynamicsCompressorNode.attack.setValueAtTime(0.003, audioCtx.currentTime);
+                    dynamicsCompressorNode.release.setValueAtTime(0.25, audioCtx.currentTime);
+
+                    // GainNode (volume boost slider 100% - 300%)
+                    gainNode = audioCtx.createGain();
+                    const initialGain = parseFloat(currentVolumeBoostPercent) / 100.0;
+                    gainNode.gain.setValueAtTime(initialGain, audioCtx.currentTime);
+
+                    // AudioContext -> BiquadFilterNode -> DynamicsCompressorNode -> GainNode -> destination
+                    audioSourceNode.connect(biquadFilterNode);
+                    biquadFilterNode.connect(dynamicsCompressorNode);
+                    dynamicsCompressorNode.connect(gainNode);
+                    gainNode.connect(audioCtx.destination);
+                } catch (e) {
+                    console.warn("WebAudio connection notice:", e);
+                }
+            }
+
+            if (audioCtx && audioCtx.state === 'suspended') {
+                audioCtx.resume().catch(() => {});
+            }
+        }
+
+        function toggleAudioPanel() {
+            const panel = document.getElementById('audioControlPanel');
+            if (!panel) return;
+            const isHidden = panel.classList.contains('hidden');
+            if (isHidden) {
+                panel.classList.remove('hidden');
+                initWebAudio();
+            } else {
+                panel.classList.add('hidden');
+            }
+        }
+
+        function onVolumeBoostChange(percent) {
+            currentVolumeBoostPercent = percent;
+            const valEl = document.getElementById('volumeBoostVal');
+            if (valEl) valEl.innerText = `${percent}%`;
+
+            initWebAudio();
+            if (gainNode && audioCtx) {
+                const gainVal = parseFloat(percent) / 100.0;
+                gainNode.gain.setValueAtTime(gainVal, audioCtx.currentTime);
+            }
+        }
+
+        function setAudioProfile(profile) {
+            currentAudioProfile = profile;
+            initWebAudio();
+            if (audioCtx) {
+                const t = audioCtx.currentTime;
+                if (profile === 'dialogue') {
+                    // +4dB voice boost via BiquadFilter
+                    if (biquadFilterNode) biquadFilterNode.gain.setValueAtTime(4.0, t);
+                    if (dynamicsCompressorNode) dynamicsCompressorNode.ratio.setValueAtTime(2.0, t);
+                } else if (profile === 'night') {
+                    // Night Mode: DynamicsCompressorNode
+                    if (biquadFilterNode) biquadFilterNode.gain.setValueAtTime(2.0, t);
+                    if (dynamicsCompressorNode) {
+                        dynamicsCompressorNode.threshold.setValueAtTime(-28, t);
+                        dynamicsCompressorNode.ratio.setValueAtTime(8.0, t);
+                    }
+                } else { // standard
+                    if (biquadFilterNode) biquadFilterNode.gain.setValueAtTime(0, t);
+                    if (dynamicsCompressorNode) {
+                        dynamicsCompressorNode.threshold.setValueAtTime(-24, t);
+                        dynamicsCompressorNode.ratio.setValueAtTime(1.0, t);
+                    }
+                }
+            }
+
+            ['standard', 'dialogue', 'night'].forEach(p => {
+                const btn = document.getElementById(`profileBtn_${p}`);
+                if (!btn) return;
+                if (p === profile) {
+                    btn.className = "px-2 py-1.5 rounded-lg text-center text-[10px] font-bold border transition-all bg-white text-zinc-950 border-white shadow-sm";
+                } else {
+                    btn.className = "px-2 py-1.5 rounded-lg text-center text-[10px] font-bold border transition-all bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border-white/10";
+                }
+            });
+
+            const profileTitles = {
+                standard: 'Standard',
+                dialogue: 'Dialogue Clarity (+4dB Voice Boost)',
+                night: 'Night Mode (Dynamics Compression)'
+            };
+            showToast(`🎧 Profile: ${profileTitles[profile] || profile}`);
+        }
+
+        function formatCodecBadge(codec, channels = '') {
+            const c = (codec || '').toUpperCase();
+            const ch = channels ? (String(channels).includes('.') ? channels : `${channels} ch`) : '';
+            if (c.includes('TRUEHD') || c.includes('MLP')) return `[DOLBY TRUEHD ${ch || '7.1'}]`;
+            if (c.includes('DTS-HD') || c.includes('DTSHD')) return `[DTS-HD ${ch || '7.1'}]`;
+            if (c.includes('DTS') || c.includes('DCA')) return `[DTS ${ch || '5.1'}]`;
+            if (c.includes('EAC3') || c.includes('E-AC-3') || c.includes('DDP') || c.includes('EC-3')) return `[E-AC-3 ${ch || '5.1'}]`;
+            if (c.includes('AC3') || c.includes('AC-3') || c.includes('DOLBY DIGITAL')) return `[AC-3 ${ch || '5.1'}]`;
+            if (c.includes('AAC')) return `[AAC ${ch || '2.0'}]`;
+            if (c.includes('OPUS')) return `[OPUS ${ch || '2.0'}]`;
+            if (c.includes('FLAC')) return `[FLAC ${ch || '2.0'}]`;
+            return `[${c || 'AAC'}${ch ? ' ' + ch : ''}]`;
+        }
+
+        function formatContainerBadge(container, url = '', title = '') {
+            const text = `${container || ''} ${url || ''} ${title || ''} ${currentMediaBadge || ''}`.toUpperCase();
+            if (text.includes('REMUX')) return '[REMUX]';
+            if (text.includes('2160') || text.includes('4K') || text.includes('HEVC') || text.includes('H.265')) return '[4K HEVC]';
+            if (text.includes('MKV')) return '[MKV]';
+            return '[MP4]';
+        }
+
+        function isUnsupportedBrowserCodec(codec) {
+            if (!codec) return false;
+            const c = String(codec).toLowerCase();
+            return c.includes('truehd') || c.includes('mlp') || c.includes('dts') || c.includes('dca') || c.includes('ac3') || c.includes('ac-3') || c.includes('eac3') || c.includes('ec-3');
+        }
+
+        function buildFallbackAudioProbe(url) {
+            const combined = `${currentMediaTitle} ${currentMediaBadge} ${url}`.toUpperCase();
+            let detectedCodec = 'aac';
+            let channels = '2.0';
+            let tracks = [];
+
+            if (combined.includes('TRUEHD')) {
+                detectedCodec = 'truehd';
+                channels = '7.1';
+            } else if (combined.includes('DTS-HD') || combined.includes('DTSHD')) {
+                detectedCodec = 'dts-hd';
+                channels = '7.1';
+            } else if (combined.includes('DTS') || combined.includes('DCA')) {
+                detectedCodec = 'dts';
+                channels = '5.1';
+            } else if (combined.includes('DDP') || combined.includes('EAC3') || combined.includes('E-AC-3')) {
+                detectedCodec = 'eac3';
+                channels = '5.1';
+            } else if (combined.includes('AC3') || combined.includes('AC-3')) {
+                detectedCodec = 'ac3';
+                channels = '5.1';
+            }
+
+            const hasDual = combined.includes('DUAL') || combined.includes('MULTI') || combined.includes('HINDI');
+            if (hasDual) {
+                tracks.push({
+                    index: 0,
+                    language: 'hin',
+                    title: 'Hindi Audio',
+                    codec: detectedCodec,
+                    channels: channels,
+                    is_default: true
+                });
+                tracks.push({
+                    index: 1,
+                    language: 'eng',
+                    title: 'English Audio',
+                    codec: detectedCodec === 'truehd' || detectedCodec === 'dts' ? detectedCodec : 'aac',
+                    channels: channels === '7.1' ? '7.1' : '5.1',
+                    is_default: false
+                });
+            } else {
+                tracks.push({
+                    index: 0,
+                    language: 'eng',
+                    title: 'Original Audio',
+                    codec: detectedCodec,
+                    channels: channels,
+                    is_default: true
+                });
+            }
+
+            return {
+                container: combined.includes('REMUX') ? 'REMUX' : (combined.includes('MKV') ? 'MKV' : 'MP4'),
+                detected_codec: detectedCodec,
+                audio_tracks: tracks,
+                needs_transcode: isUnsupportedBrowserCodec(detectedCodec)
+            };
+        }
+
+        async function fetchAudioProbe(url) {
+            const codecBadge = document.getElementById('audioDetectedCodecBadge');
+            if (codecBadge) codecBadge.innerText = 'Probing...';
+
+            let data = null;
+            try {
+                const controller = new AbortController();
+                const tid = setTimeout(() => controller.abort(), 2500);
+                const res = await fetch(`${API_BASE}/api/audio/probe?url=${encodeURIComponent(url)}`, { signal: controller.signal });
+                clearTimeout(tid);
+                if (res.ok) {
+                    data = await res.json();
+                }
+            } catch (e) {
+                console.warn("Probe API fetch notice:", e);
+            }
+
+            if (!data || (!data.audio_tracks && !data.tracks && !data.streams && !Array.isArray(data))) {
+                data = buildFallbackAudioProbe(url);
+            }
+
+            currentAudioProbeData = data;
+            return renderAudioProbeUI(data, url);
+        }
+
+        function renderAudioProbeUI(data, url) {
+            let tracks = data.audio_tracks || data.tracks || data.streams || [];
+            if (!Array.isArray(tracks) && Array.isArray(data)) tracks = data;
+            if (!tracks || tracks.length === 0) {
+                tracks = [{ index: 0, language: 'eng', title: 'Default Audio', codec: data.detected_codec || 'aac', channels: '2.0' }];
+            }
+
+            const primaryTrack = tracks[selectedAudioTrackIndex] || tracks[0] || {};
+            const detectedCodec = data.detected_codec || primaryTrack.codec || 'aac';
+            const channels = primaryTrack.channels || primaryTrack.channel_layout || '2.0';
+            const container = data.container || (url.includes('.mkv') ? 'MKV' : 'MP4');
+
+            const codecDisplay = formatCodecBadge(detectedCodec, channels);
+            const containerDisplay = formatContainerBadge(container, url, currentMediaTitle);
+
+            // Update live badges
+            const codecEl = document.getElementById('audioDetectedCodecBadge');
+            if (codecEl) codecEl.innerText = codecDisplay;
+            const containerEl = document.getElementById('audioContainerBadge');
+            if (containerEl) containerEl.innerText = containerDisplay;
+
+            // Silent Audio Alert Banner Check
+            const hasUnsupported = isUnsupportedBrowserCodec(detectedCodec) || tracks.some(t => isUnsupportedBrowserCodec(t.codec));
+            const alertBanner = document.getElementById('silentAudioAlertBanner');
+            const codecNameEl = document.getElementById('silentAudioCodecName');
+
+            if (alertBanner) {
+                if (hasUnsupported && currentPlaybackEngine === 'direct') {
+                    if (codecNameEl) codecNameEl.innerText = codecDisplay.replace(/[\[\]]/g, '');
+                    alertBanner.classList.remove('hidden');
+                } else {
+                    alertBanner.classList.add('hidden');
+                }
+            }
+
+            // Render Audio Track Selector Radio Group
+            const countBadge = document.getElementById('audioTrackCountBadge');
+            if (countBadge) countBadge.innerText = `${tracks.length} Track${tracks.length > 1 ? 's' : ''}`;
+
+            const tracksList = document.getElementById('audioTracksList');
+            if (tracksList) {
+                tracksList.innerHTML = tracks.map((track, idx) => {
+                    const trackIndex = track.index !== undefined ? track.index : idx;
+                    const isSelected = trackIndex === selectedAudioTrackIndex;
+                    const lang = (track.language || track.lang || 'und').toUpperCase();
+                    const title = track.title || track.name || `Audio Track ${trackIndex + 1}`;
+                    const tCodec = (track.codec || detectedCodec || 'aac').toUpperCase();
+                    const tChan = track.channels || track.channel_layout || '2.0';
+
+                    return `
+                        <label class="focusable flex items-center justify-between p-2.5 rounded-xl border cursor-pointer transition-all ${isSelected ? 'bg-zinc-800 border-white/30 shadow-md ring-1 ring-white/20' : 'bg-zinc-950/70 border-white/5 hover:border-white/20'}">
+                            <div class="flex items-center gap-2.5 min-w-0">
+                                <input type="radio" name="audioTrackRadio" value="${trackIndex}" ${isSelected ? 'checked' : ''}
+                                       onchange="selectAudioTrack(${trackIndex})" class="w-3.5 h-3.5 accent-indigo-500 cursor-pointer">
+                                <span class="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300 border border-white/10 uppercase">${lang}</span>
+                                <div class="min-w-0">
+                                    <span class="text-xs font-semibold text-white truncate block">${title}</span>
+                                    <span class="text-[10px] font-mono text-zinc-400 block">${tChan} • ${tCodec}</span>
+                                </div>
+                            </div>
+                            <span class="text-[10px] font-mono font-bold ${isSelected ? 'text-emerald-400' : 'text-zinc-500'}">
+                                ${isSelected ? 'ACTIVE' : 'SELECT'}
+                            </span>
+                        </label>
+                    `;
+                }).join('');
+            }
+
+            return {
+                detectedCodec,
+                detectedCodecDisplay: codecDisplay,
+                containerDisplay,
+                tracks,
+                needsTranscode: hasUnsupported
+            };
+        }
+
+        function selectAudioTrack(trackIndex) {
+            selectedAudioTrackIndex = trackIndex;
+            const tracks = currentAudioProbeData?.audio_tracks || currentAudioProbeData?.tracks || [];
+            const track = tracks.find(t => (t.index !== undefined ? t.index : 0) === trackIndex) || tracks[trackIndex];
+            const trackName = track ? (track.title || track.language || `Track ${trackIndex + 1}`) : `Track ${trackIndex + 1}`;
+
+            showToast(`🎧 Selected Track ${trackIndex + 1}: ${trackName}`);
+            renderAudioProbeUI(currentAudioProbeData, currentDirectUrl || currentStreamUrl);
+
+            // Switch or reload active stream with the newly selected track
+            switchPlaybackEngine('transcode', true);
+        }
+
+        async function switchPlaybackEngine(engineMode, reload = true) {
+            const video = document.getElementById('videoElement');
+            const target = currentDirectUrl || currentStreamUrl;
+            if (!target) return;
+
+            currentPlaybackEngine = engineMode;
+
+            // Update 3 toggle buttons UI
+            ['direct', 'transcode', 'vlc'].forEach(mode => {
+                const btn = document.getElementById(`engineBtn_${mode}`);
+                if (!btn) return;
+                if (mode === engineMode) {
+                    btn.className = "w-full px-3 py-2 rounded-xl text-left text-xs font-semibold flex items-center justify-between border transition-all bg-white text-zinc-950 border-white shadow-sm";
+                } else {
+                    btn.className = "w-full px-3 py-2 rounded-xl text-left text-xs font-semibold flex items-center justify-between border transition-all bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border-white/10";
+                }
+            });
+
+            const engineBadge = document.getElementById('audioEngineBadge');
+            const alertBanner = document.getElementById('silentAudioAlertBanner');
+
+            if (engineMode === 'vlc') {
+                if (engineBadge) {
+                    engineBadge.innerText = 'External VLC';
+                    engineBadge.className = 'px-2 py-0.5 rounded font-mono text-[11px] font-bold bg-orange-500/20 text-orange-300 border border-orange-500/30';
+                }
+                if (alertBanner) alertBanner.classList.add('hidden');
+                const currentTime = video ? (video.currentTime || 0) : 0;
+                showToast("▲ Launching Hardware Bitstreaming in VLC...");
+                openExternalVLC(target, currentTime);
+                return;
+            }
+
+            if (engineMode === 'transcode') {
+                if (engineBadge) {
+                    engineBadge.innerText = 'Smart Transcode (AAC)';
+                    engineBadge.className = 'px-2 py-0.5 rounded font-mono text-[11px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30';
+                }
+                if (alertBanner) alertBanner.classList.add('hidden');
+
+                if (reload && video) {
+                    const currentTime = Math.floor(video.currentTime || 0);
+                    const boostVal = (parseFloat(currentVolumeBoostPercent) / 100.0).toFixed(1);
+                    const transcodeUrl = `${API_BASE}/stream/transcode?url=${encodeURIComponent(target)}&track=${selectedAudioTrackIndex}&ss=${currentTime}&boost=${boostVal}`;
+                    showToast("🔄 Smart Audio Transcode Active (FFmpeg Copy + AAC Stereo)");
+                    await startPlayback(transcodeUrl, 0);
+                }
+            } else { // direct
+                if (engineBadge) {
+                    engineBadge.innerText = 'Direct Web Stream';
+                    engineBadge.className = 'px-2 py-0.5 rounded font-mono text-[11px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30';
+                }
+
+                const isUnsupported = currentAudioProbeData ? isUnsupportedBrowserCodec(currentAudioProbeData.detected_codec) : false;
+                if (alertBanner) {
+                    if (isUnsupported) alertBanner.classList.remove('hidden');
+                    else alertBanner.classList.add('hidden');
+                }
+
+                if (reload && video) {
+                    const currentTime = video.currentTime || 0;
+                    showToast("⚡ Direct Web Stream Active");
+                    await startPlayback(target, currentTime);
+                }
+            }
+        }
+
         // 3. Media Playback, VLC Toggle, Autoplay, and History
         async function handlePlayClick(releaseIndex, streamUrl, rawTarget, title, badge, posterUrl = '') {
             currentPlayingReleaseIndex = releaseIndex;
             currentMediaTitle = title;
             currentMediaBadge = badge;
             currentStreamUrl = streamUrl;
+            currentPlaybackEngine = 'direct';
+            selectedAudioTrackIndex = 0;
 
             if (vlcModeEnabled) {
                 addToHistory(title, badge, streamUrl, rawTarget, streamUrl, posterUrl, 0, 0);
@@ -1491,7 +2421,7 @@
             const overlay = document.getElementById('playerOverlay');
             const video = document.getElementById('videoElement');
             document.getElementById('playerMediaTitle').innerText = title;
-            document.getElementById('playerStreamBadge').innerText = `${badge} • Inspecting Stream Magic Bytes & Container...`;
+            document.getElementById('playerStreamBadge').innerText = `${badge} • Inspecting Stream Magic Bytes & Audio Codecs...`;
             overlay.classList.remove('hidden');
 
             // Pre-resolve direct stream URL and verify format (MKV, MP4, HLS, TS)
@@ -1543,7 +2473,16 @@
                 return;
             }
 
-            await startPlayback(directUrl);
+            // Auto-probe stream audio and detect TrueHD/DTS/AC3
+            const probeResult = await fetchAudioProbe(directUrl);
+
+            if (probeResult && probeResult.needsTranscode) {
+                // Seamlessly auto-activate Smart Transcode or display informative toast so user hears audio on first play!
+                showToast(`🎧 Detected ${probeResult.detectedCodecDisplay}: Auto-activating Smart Audio Transcode (AAC)...`);
+                await switchPlaybackEngine('transcode', true);
+            } else {
+                await startPlayback(directUrl);
+            }
         }
 
         async function startPlayback(url, resumeTime = 0) {
@@ -1559,7 +2498,10 @@
                     openExternalVLC(url);
                 } else {
                     document.getElementById('playerStreamBadge').innerHTML = `
-                        <span class="text-amber-400">⚠️ Codec / MKV requires external player.</span>
+                        <span class="text-amber-400">⚠️ Codec / MKV requires external player or transcode.</span>
+                        <button onclick="switchPlaybackEngine('transcode')" class="ml-2 px-2.5 py-1 rounded bg-indigo-600 text-white font-bold text-xs hover:bg-indigo-500 transition-colors">
+                            🔄 Smart Transcode
+                        </button>
                         <button onclick="openExternalVLC('${url.replace(/'/g, "\\'")}')" class="ml-2 px-2.5 py-1 rounded bg-orange-600 text-white font-bold text-xs hover:bg-orange-500 transition-colors">
                             ▲ Launch in VLC
                         </button>
@@ -1572,6 +2514,7 @@
                     await shakaPlayerInstance.load(url);
                     if (resumeTime > 0) video.currentTime = resumeTime;
                     video.play().catch(e => console.log('Shaka auto-play notice:', e));
+                    initWebAudio();
                     return;
                 } catch (e) {
                     console.warn('Shaka load failed, falling back to native src:', e);
@@ -1590,7 +2533,9 @@
             }
             const playPromise = video.play();
             if (playPromise !== undefined) {
-                playPromise.catch(error => {
+                playPromise.then(() => {
+                    initWebAudio();
+                }).catch(error => {
                     console.log("Web player autoplay notice:", error);
                 });
             }
@@ -1599,6 +2544,8 @@
         function closeVideoPlayer() {
             const overlay = document.getElementById('playerOverlay');
             const video = document.getElementById('videoElement');
+            const panel = document.getElementById('audioControlPanel');
+            if (panel) panel.classList.add('hidden');
             if (shakaPlayerInstance) {
                 shakaPlayerInstance.unload().catch(() => {});
             }
@@ -1606,6 +2553,7 @@
             video.removeAttribute('src');
             video.load();
             overlay.classList.add('hidden');
+            currentPlaybackEngine = 'direct';
         }
 
         async function openExternalVLC(streamUrl, startTime = 0) {
@@ -2030,6 +2978,233 @@
             }
             localStorage.setItem('playro_tg_bot', selectedTgBot);
             closeConfigModal();
+        }
+
+        // 6.5 Stremio Catalog Addons Controller Functions
+        function openAddonsModal() {
+            const modal = document.getElementById('addonsModal');
+            if (modal) {
+                modal.classList.remove('hidden');
+                loadInstalledAddons();
+            }
+        }
+
+        function closeAddonsModal() {
+            const modal = document.getElementById('addonsModal');
+            if (modal) {
+                modal.classList.add('hidden');
+            }
+            const msgEl = document.getElementById('addonInstallMsg');
+            if (msgEl) {
+                msgEl.className = 'hidden text-xs font-mono';
+                msgEl.innerText = '';
+            }
+        }
+
+        async function loadInstalledAddons() {
+            const container = document.getElementById('addonsListContainer');
+            const badge = document.getElementById('addonsCountBadge');
+            try {
+                const res = await fetch(`${API_BASE}/api/addons`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+                const addons = Array.isArray(data) ? data : (data.addons || data.results || []);
+
+                if (badge) {
+                    const activeCount = addons.filter(a => a.enabled !== false && a.active !== false).length;
+                    badge.innerText = activeCount || addons.length || '0';
+                }
+
+                if (!container) return;
+
+                if (addons.length === 0) {
+                    container.innerHTML = `
+                        <div class="p-6 rounded-2xl bg-zinc-900/60 border border-white/5 text-center text-zinc-500 font-mono text-xs">
+                            No addons installed. Use the form below to install a catalog manifest.
+                        </div>
+                    `;
+                    return;
+                }
+
+                container.innerHTML = addons.map(addon => {
+                    const id = addon.id || addon.manifest?.id || '';
+                    const safeId = id.replace(/'/g, "\\'");
+                    const name = addon.name || addon.manifest?.name || 'Catalog Extension';
+                    const version = addon.version || addon.manifest?.version || '1.0.0';
+                    const description = addon.description || addon.manifest?.description || 'Stremio catalog metadata extension.';
+                    const isEnabled = addon.enabled !== false && addon.active !== false;
+                    const isDefault = !!(addon.is_default || addon.default || id === 'community.cinemeta' || id === 'cinemeta');
+                    const iconRaw = addon.icon || addon.manifest?.icon || '';
+
+                    const iconHtml = iconRaw.startsWith('http')
+                        ? `<img src="${iconRaw}" alt="${name}" class="w-8 h-8 rounded-lg object-contain bg-zinc-800 border border-white/10 flex-shrink-0" onerror="this.outerHTML='<span class=\\'text-xl flex-shrink-0\\'>🧩</span>'">`
+                        : `<span class="text-xl flex-shrink-0">${iconRaw || '🧩'}</span>`;
+
+                    const statusBadgeHtml = isEnabled
+                        ? `<span class="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Active</span>`
+                        : `<span class="text-[10px] font-mono px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-white/10">Disabled</span>`;
+
+                    const defaultBadgeHtml = isDefault
+                        ? `<span class="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">Default</span>`
+                        : '';
+
+                    const toggleBtnHtml = `
+                        <button onclick="toggleAddon('${safeId}')"
+                            class="focusable px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${isEnabled ? 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border-white/10' : 'bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border-emerald-500/30'}"
+                            tabindex="0">
+                            ${isEnabled ? 'Disable' : 'Enable'}
+                        </button>
+                    `;
+
+                    const deleteBtnHtml = !isDefault ? `
+                        <button onclick="deleteAddon('${safeId}')"
+                            class="focusable p-1.5 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 transition-all text-xs"
+                            title="Delete Addon"
+                            tabindex="0">
+                            🗑
+                        </button>
+                    ` : '';
+
+                    return `
+                        <div class="p-4 rounded-2xl bg-zinc-900/80 border border-white/[0.08] hover:border-white/15 transition-all flex items-center justify-between gap-4">
+                            <div class="flex items-center gap-3.5 min-w-0">
+                                ${iconHtml}
+                                <div class="min-w-0">
+                                    <div class="flex items-center gap-2 flex-wrap">
+                                        <h4 class="text-xs sm:text-sm font-bold text-white truncate">${name}</h4>
+                                        <span class="text-[10px] font-mono px-1.5 py-0.2 rounded bg-zinc-800 text-zinc-400 border border-white/10">v${version}</span>
+                                        ${statusBadgeHtml}
+                                        ${defaultBadgeHtml}
+                                    </div>
+                                    <p class="text-[11px] text-zinc-400 truncate max-w-md mt-0.5">${description}</p>
+                                </div>
+                            </div>
+                            <div class="flex items-center gap-2 flex-shrink-0">
+                                ${toggleBtnHtml}
+                                ${deleteBtnHtml}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+
+            } catch (err) {
+                console.error("Failed to load addons:", err);
+                if (container) {
+                    container.innerHTML = `
+                        <div class="p-6 rounded-2xl bg-red-950/40 border border-red-500/20 text-center text-red-400 font-mono text-xs">
+                            Error loading addons: ${err.message}
+                        </div>
+                    `;
+                }
+            }
+        }
+
+        async function toggleAddon(id) {
+            try {
+                const res = await fetch(`${API_BASE}/api/addons/${encodeURIComponent(id)}/toggle`, {
+                    method: 'POST'
+                });
+                if (!res.ok) {
+                    const errData = await res.json().catch(() => ({}));
+                    throw new Error(errData.detail || `HTTP ${res.status}`);
+                }
+                showToast(`Addon ${id} updated`, 'info');
+                await loadInstalledAddons();
+            } catch (err) {
+                console.error("Toggle addon error:", err);
+                showToast(`Failed to toggle addon: ${err.message}`, 'error');
+            }
+        }
+
+        async function deleteAddon(id) {
+            if (!confirm(`Are you sure you want to remove addon "${id}"?`)) return;
+            try {
+                const res = await fetch(`${API_BASE}/api/addons/${encodeURIComponent(id)}`, {
+                    method: 'DELETE'
+                });
+                if (!res.ok) {
+                    const errData = await res.json().catch(() => ({}));
+                    throw new Error(errData.detail || `HTTP ${res.status}`);
+                }
+                showToast(`Addon ${id} removed`, 'info');
+                await loadInstalledAddons();
+            } catch (err) {
+                console.error("Delete addon error:", err);
+                showToast(`Failed to delete addon: ${err.message}`, 'error');
+            }
+        }
+
+        async function installCustomAddon() {
+            const input = document.getElementById('customAddonInput');
+            const btn = document.getElementById('installAddonBtn');
+            const msgEl = document.getElementById('addonInstallMsg');
+            if (!input) return;
+
+            let url = input.value.trim();
+            if (!url) {
+                if (msgEl) {
+                    msgEl.className = 'text-xs font-mono text-amber-400';
+                    msgEl.innerText = 'Please enter a manifest URL or stremio:// link.';
+                    msgEl.classList.remove('hidden');
+                }
+                return;
+            }
+
+            // Normalise stremio:// protocol
+            if (url.startsWith('stremio://')) {
+                url = 'https://' + url.substring(10);
+            }
+
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = `<span class="animate-spin">⏳</span><span>Installing...</span>`;
+            }
+            if (msgEl) {
+                msgEl.className = 'text-xs font-mono text-zinc-400';
+                msgEl.innerText = 'Fetching manifest and installing addon...';
+                msgEl.classList.remove('hidden');
+            }
+
+            try {
+                const res = await fetch(`${API_BASE}/api/addons/install`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: url })
+                });
+
+                const data = await res.json().catch(() => ({}));
+
+                if (!res.ok) {
+                    throw new Error(data.detail || data.error || `HTTP ${res.status}`);
+                }
+
+                if (msgEl) {
+                    msgEl.className = 'text-xs font-mono text-emerald-400';
+                    msgEl.innerText = `✅ Successfully installed addon: ${data.name || data.id || 'Custom Addon'}`;
+                    msgEl.classList.remove('hidden');
+                }
+                input.value = '';
+                showToast('Addon installed successfully', 'info');
+                await loadInstalledAddons();
+
+                setTimeout(() => {
+                    if (msgEl) msgEl.classList.add('hidden');
+                }, 4000);
+
+            } catch (err) {
+                console.error("Install addon error:", err);
+                if (msgEl) {
+                    msgEl.className = 'text-xs font-mono text-red-400';
+                    msgEl.innerText = `Installation failed: ${err.message}`;
+                    msgEl.classList.remove('hidden');
+                }
+                showToast(`Failed to install: ${err.message}`, 'error');
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = `<span>Install Addon</span>`;
+                }
+            }
         }
 
         // 7. Spatial Navigation for Google TV / Xiaomi X Pro Remotes

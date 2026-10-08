@@ -8,3 +8,9 @@ Thumbs.db
 
 # GitHub Actions workflows
 .github/workflows/
+
+# Playwright & Browser Profiles
+.browser_profile/
+
+# Repomix outputs
+repomix-output.xml

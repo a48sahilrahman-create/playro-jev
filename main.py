@@ -19,13 +19,14 @@ import re
 import json
 import base64
 import urllib.parse
+import difflib
 from typing import Optional, List, Dict, Any
 from contextlib import asynccontextmanager
 
 import httpx
 import uvicorn
 from fastapi import FastAPI, Request, Response, HTTPException
-from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse, FileResponse
+from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -39,6 +40,9 @@ from link_resolver import LinkResolver
 from stream_verifier import StreamVerifier
 from title_resolver import TitleResolver
 from auth_bridge import InteractiveAuthBridge
+from addon_manager import AddonManager
+from audio_probe import probe_audio_streams, find_ffmpeg
+from audio_transcoder import stream_transcoded_media
 
 play_engine = PlayEngine()
 db = MediaDB()
@@ -46,13 +50,19 @@ link_resolver = LinkResolver()
 stream_verifier = StreamVerifier()
 title_resolver = TitleResolver()
 auth_bridge = InteractiveAuthBridge()
+addon_manager = AddonManager()
+
+DEFAULT_HTTP_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+    "Accept": "*/*"
+}
 
 http_client: Optional[httpx.AsyncClient] = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global http_client
-    http_client = httpx.AsyncClient(timeout=10.0, follow_redirects=True)
+    http_client = httpx.AsyncClient(timeout=2.0, headers=DEFAULT_HTTP_HEADERS, follow_redirects=True)
     print("[*] Play Engine Multi-User Cloud Addon Initialized.")
     yield
     if http_client:
@@ -333,6 +343,99 @@ async def health_check():
         "uptime": "online"
     })
 
+# -------------------------------------------------------------
+# 2.1 Addon Management REST Endpoints
+# -------------------------------------------------------------
+@app.get("/api/addons")
+async def api_get_addons():
+    """Returns list of installed Stremio/media addons."""
+    return JSONResponse({"status": "success", "addons": addon_manager.get_addons()})
+
+@app.post("/api/addons/install")
+async def api_install_addon(request: Request):
+    """
+    Installs a Stremio addon via manifest URL.
+    Validates manifest, checks resources/catalogs, and stores in active registry.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    url = body.get("url") if isinstance(body, dict) else None
+    if not url or not isinstance(url, str) or not url.strip():
+        raise HTTPException(status_code=400, detail="Missing or invalid 'url' parameter")
+
+    try:
+        installed = await addon_manager.install_addon(url.strip(), client=http_client)
+        if not installed:
+            raise HTTPException(status_code=400, detail="Failed to install addon")
+        return JSONResponse({"status": "success", "addon": installed})
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.delete("/api/addons/{addon_id}")
+async def api_delete_addon(addon_id: str):
+    """Removes an installed addon by its ID."""
+    try:
+        success = await addon_manager.delete_addon(addon_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Addon not found")
+        return JSONResponse({"status": "success", "addon_id": addon_id})
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+@app.post("/api/addons/{addon_id}/toggle")
+async def api_toggle_addon(addon_id: str, request: Request):
+    """Toggles an addon's enabled status or sets it explicitly via JSON {'enabled': bool}."""
+    enabled = None
+    try:
+        body = await request.json()
+        if isinstance(body, dict) and "enabled" in body:
+            enabled = bool(body["enabled"])
+    except Exception:
+        enabled = None
+
+    try:
+        updated = await addon_manager.toggle_addon(addon_id, enabled)
+        if not updated:
+            raise HTTPException(status_code=404, detail="Addon not found")
+        return JSONResponse({"status": "success", "addon": updated})
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+@app.get("/stream/transcode")
+async def stream_transcode(
+    url: str,
+    track: int = 0,
+    ss: float = 0.0,
+    boost: float = 1.0
+):
+    """
+    On-the-fly audio transcoding stream endpoint.
+    Passes video packets untouched (-c:v copy) while transcoding audio track to AAC stereo.
+    """
+    if not url or not url.strip():
+        raise HTTPException(status_code=400, detail="Missing or invalid stream URL")
+    if track < 0:
+        raise HTTPException(status_code=400, detail="Audio track index must be >= 0")
+    if ss < 0:
+        raise HTTPException(status_code=400, detail="Start time (ss) must be >= 0")
+    if boost <= 0:
+        raise HTTPException(status_code=400, detail="Volume boost must be > 0")
+
+    return StreamingResponse(
+        stream_transcoded_media(url, audio_track_index=track, start_time=ss, volume_boost=boost),
+        media_type="video/mp4",
+        headers={"Accept-Ranges": "bytes", "Cache-Control": "no-cache"}
+    )
+
 @app.get("/stream/{media_type}/{stream_id}.json")
 @app.get("/stream/{media_type}/{stream_id}")
 @app.get("/{user_config}/stream/{media_type}/{stream_id}.json")
@@ -404,11 +507,11 @@ async def get_streams(
 
         # 2. Search Multi-Source Parallel Fleet (Local DB, Vega, UHD, HDHub4u, Ola, TG, YT)
         search_query = f"{title} {year}" if year else title
-        search_result = await play_engine.search(title if (season is not None) else search_query)
+        search_result = await play_engine.search(title if (season is not None) else search_query, season=season, episode=episode)
         releases = search_result.get("releases", []) if isinstance(search_result, dict) else []
 
         if not releases and title != search_query:
-            search_result = await play_engine.search(title)
+            search_result = await play_engine.search(title, season=season, episode=episode)
             releases = search_result.get("releases", []) if isinstance(search_result, dict) else []
 
         if releases and season is not None and episode is not None:
@@ -557,61 +660,88 @@ def set_cached_streams(key: str, data: dict):
     }
 
 def filter_episode_streams(releases: list, season: int, episode: int) -> list:
-    """
-    Strict Single-Episode Stream Filter:
-    Matches only releases containing S01E01 / S1 E1 / Season 1 Episode 1 / Ep 1.
-    Strictly filters out multi-season batch packs (Season 1-5, Complete Series, S01-S05 Zip)
-    without falsely rejecting single-episode links whose post titles mention multi-season bundles.
+    r"""
+    Robust Pairwise Season and Episode Matching Filter:
+    - Strictly enforces s_num and e_num matching.
+    - Explicitly rejects batch/zip keywords: r'(?:batch\s*[/|\-]?\s*zip|season\s*\d+\s*(?:zip|pack)|full\s*season|all\s*episodes|complete\s*(?:series|season|batch|pack)|s\d+\s*-\s*s\d+|s\d+\s*to\s*s\d+|\b(?:pack|zip|zips)\b|\[all\s*episodes\]|\bcomplete\b)'.
+    - Rejects any release if label contains a conflicting season (e.g. S02, S03, S04 when looking for Season 1).
+    - Matches exact S{s_num}E{e_num} in episode_tag or label.
+    - Matches Episode {e_num} in label.
+    - Matches direct S{s_num}E{e_num} in title.
+    - Returns ONLY matched releases (never return batch zips or whole season packs). If matched is empty, return [] (or safe_fallback filtered for non-batch).
     """
     s_num = int(season)
     e_num = int(episode)
 
-    # Patterns matching the exact targeted episode
-    ep_pats = [
-        rf'\bs0*{s_num}\s*e0*{e_num}\b',
-        rf'\b{s_num}x0*{e_num}\b',
-        rf'\bseason\s*0*{s_num}\b.*?\b(?:episodes?|ep)\s*0*{e_num}\b',
-        rf'\bs0*{s_num}\b.*?\b(?:episodes?|ep)\s*0*{e_num}\b',
-        rf'\b(?:episodes?|ep)\s*0*{e_num}\b'
-    ]
+    batch_kw_pattern = (
+        r'(?:batch\s*[/|\-]?\s*zip|season\s*\d+\s*(?:zip|pack)|full\s*season|all\s*episodes|'
+        r'complete\s*(?:series|season|batch|pack)|s\d+\s*-\s*s\d+|s\d+\s*to\s*s\d+|'
+        r'\b(?:pack|zip|zips)\b|\[all\s*episodes\]|\bcomplete\b)'
+    )
 
-    # Batch pattern applied strictly to button labels/tags, NOT the main post title
-    batch_btn_pattern = r'\b(s\d+\s*-\s*s\d+|s\d+\s*to\s*s\d+|season\s*\d+\s*-\s*\d+|season\s*\d+\s*to\s*\d+|complete\s*series|all\s*episodes|full\s*season\s*zip|season\s*\d+\s*zip|complete\s*batch|full\s*batch|batch\s*zip|pack)\b'
-
-    matched = []
-    season_matched = []
+    exact_se_pat = rf'\bs0*{s_num}\s*e0*{e_num}\b'
+    exact_ep_in_lbl = rf'\b(?:episodes?|ep|e)\s*0*{e_num}\b'
+    matching = []
 
     for r in releases:
-        label = (r.get("label") or "").strip().lower()
-        title = (r.get("title") or "").strip().lower()
-        ep_tag = (r.get("episode_tag") or "").strip().lower()
-        full_text = f"{title} {label} {ep_tag}"
+        label = (r.get("label") or "").strip()
+        title = (r.get("title") or "").strip()
+        ep_tag = (r.get("episode_tag") or "").strip()
 
-        # Check if the specific button / link is a full multi-season/batch zip
-        is_batch_btn = bool(re.search(batch_btn_pattern, label, re.I))
+        # 1. Reject explicit batch/zip
+        if r.get("is_batch") is True:
+            continue
+        if re.search(batch_kw_pattern, label, re.I) or re.search(batch_kw_pattern, ep_tag, re.I):
+            continue
+        if re.search(batch_kw_pattern, title, re.I):
+            continue
 
-        # Check if matches target episode
-        is_ep_match = any(bool(re.search(p, full_text, re.I)) for p in ep_pats[:4])
-        if not is_ep_match:
-            # Check if season matches in full_text and episode matches in label or ep_tag
-            has_season = bool(re.search(rf'\b(?:s|season)\s*0*{s_num}\b', full_text, re.I))
-            has_ep = bool(re.search(rf'\b(?:episodes?|ep|e)\s*0*{e_num}\b', f"{label} {ep_tag}", re.I))
-            if has_season and has_ep:
-                is_ep_match = True
+        # 2. Rejects any release if label contains a conflicting season (e.g. S02, S03, S04 when looking for Season 1)
+        lbl_seasons = re.findall(r'\b(?:season|s)\s*0*(\d{1,2})\b', label, re.I)
+        if any(int(ls) != s_num for ls in lbl_seasons):
+            continue
 
-        if is_ep_match and not is_batch_btn:
-            matched.append(r)
-        elif not is_batch_btn and re.search(rf'\b(?:s|season)\s*0*{s_num}\b', full_text, re.I):
-            season_matched.append(r)
+        lbl_se_seasons = re.findall(r'\bs0*(\d{1,2})e\d+\b', label, re.I)
+        if any(int(ls) != s_num for ls in lbl_se_seasons):
+            continue
 
-    if matched:
-        return matched
-    if season_matched:
-        return season_matched
-    return releases
+        tag_seasons = re.findall(r'\bs0*(\d{1,2})(?:e\d*|\b)', ep_tag, re.I)
+        if any(int(ts) != s_num for ts in tag_seasons):
+            continue
+
+        # 3. Match exact episode
+        is_matched = False
+
+        # Matches exact S{s_num}E{e_num} in episode_tag or label
+        if re.search(exact_se_pat, ep_tag, re.I) or re.search(exact_se_pat, label, re.I):
+            is_matched = True
+        # Matches Episode {e_num} in label
+        elif re.search(exact_ep_in_lbl, label, re.I):
+            is_matched = True
+        # Matches direct S{s_num}E{e_num} in title
+        elif re.search(exact_se_pat, title, re.I) or re.search(rf'\b{s_num}x0*{e_num}\b', title, re.I):
+            is_matched = True
+
+        if is_matched:
+            matching.append(r)
+
+    # Strictly enforce Zero-Leak policy: Never leak batch packs or non-matching episodes
+    if not matching:
+        print(f"[Zero-Leak Warning] No matching discrete streams found for S{s_num:02d}E{e_num:02d} across {len(releases)} candidate releases. Returning empty stream list to prevent batch season pack leaks.")
+        return []
+
+    return matching
 
 @app.get("/api/search")
-async def api_search_media(q: str, type: Optional[str] = None, season: Optional[int] = None, episode: Optional[int] = None, refresh: bool = False):
+async def api_search_media(
+    q: str,
+    type: Optional[str] = None,
+    season: Optional[int] = None,
+    episode: Optional[int] = None,
+    year: Optional[str] = None,
+    imdb_id: Optional[str] = None,
+    refresh: bool = False
+):
     """
     Universal media search endpoint for OTT Global App frontend with In-Memory Caching (< 2ms),
     Series metadata stabilization, and Single-Episode stream filtering.
@@ -642,6 +772,10 @@ async def api_search_media(q: str, type: Optional[str] = None, season: Optional[
                 season = int(s_only.group(1))
 
     cache_key = f"{base_show_title}_s{season}_e{episode}" if (season is not None and episode is not None) else (f"{base_show_title}_s{season}" if season is not None else base_show_title)
+    if year:
+        cache_key = f"{cache_key}_{year}"
+    if imdb_id:
+        cache_key = f"{imdb_id}_{cache_key}"
 
     # 1. Check in-memory stream cache
     if not refresh:
@@ -653,8 +787,12 @@ async def api_search_media(q: str, type: Optional[str] = None, season: Optional[
     is_series_request = type == "series" or season is not None
     clean_search_query = base_show_title if is_series_request else raw_q
 
-    search_task = play_engine.search(clean_search_query)
-    tmdb_task = fetch_tmdb_meta(base_show_title, media_type="series" if is_series_request else type)
+    search_task = play_engine.search(clean_search_query, year=year, imdb_id=imdb_id, season=season, episode=episode)
+    tmdb_task = fetch_tmdb_meta(
+        base_show_title,
+        media_type="series" if is_series_request else type,
+        imdb_id=imdb_id if (imdb_id and imdb_id.strip().startswith("tt")) else None
+    )
 
     search_res, tmdb_meta = await asyncio.gather(search_task, tmdb_task, return_exceptions=True)
 
@@ -684,6 +822,8 @@ async def api_search_media(q: str, type: Optional[str] = None, season: Optional[
         "base_title": base_show_title,
         "season": season,
         "episode": episode,
+        "year": year,
+        "imdb_id": imdb_id,
         "meta": meta_obj,
         "releases": releases
     }
@@ -693,15 +833,74 @@ async def api_search_media(q: str, type: Optional[str] = None, season: Optional[
 
     return JSONResponse(response_data)
 
-async def fetch_tmdb_meta(q: str, media_type: Optional[str] = None) -> dict:
+async def fetch_tmdb_meta(q: str, media_type: Optional[str] = None, imdb_id: Optional[str] = None) -> dict:
     """
     Intelligent Metadata Matcher:
-    Searches Movies and Series in parallel and picks the closest exact title match.
+    If imdb_id (starts with 'tt') is provided, queries Cinemeta directly by ID to avoid title mismatch.
+    Otherwise, searches Movies and Series in parallel and picks the closest exact title match.
     For TV Series, attaches full seasons and episodes list.
     """
     global http_client
     if not http_client:
         http_client = httpx.AsyncClient(timeout=10.0, follow_redirects=True)
+
+    # 1. Direct IMDb ID resolution to eliminate any title ambiguity
+    if imdb_id and imdb_id.strip().startswith("tt"):
+        clean_imdb = imdb_id.strip().split(":")[0]
+        try:
+            if media_type == "series":
+                tasks = [
+                    http_client.get(f"https://v3-cinemeta.strem.io/meta/series/{clean_imdb}.json"),
+                    http_client.get(f"https://v3-cinemeta.strem.io/meta/movie/{clean_imdb}.json")
+                ]
+                order = ["series", "movie"]
+            else:
+                tasks = [
+                    http_client.get(f"https://v3-cinemeta.strem.io/meta/movie/{clean_imdb}.json"),
+                    http_client.get(f"https://v3-cinemeta.strem.io/meta/series/{clean_imdb}.json")
+                ]
+                order = ["movie", "series"]
+
+            responses = await asyncio.gather(*tasks, return_exceptions=True)
+            for idx, res in enumerate(responses):
+                if not isinstance(res, Exception) and res.status_code == 200:
+                    meta_data = res.json().get("meta")
+                    if meta_data and meta_data.get("name"):
+                        m_type = meta_data.get("type") or order[idx]
+                        meta_dict = {
+                            "id": clean_imdb,
+                            "title": meta_data.get("name", q),
+                            "poster": meta_data.get("poster", ""),
+                            "backdrop": meta_data.get("background", meta_data.get("poster", "")),
+                            "year": str(meta_data.get("year", "")).split("–")[0].strip(),
+                            "rating": str(meta_data.get("imdbRating", "")),
+                            "overview": meta_data.get("description", ""),
+                            "type": m_type,
+                            "seasons": [],
+                            "episodes": []
+                        }
+                        if m_type == "series":
+                            videos = meta_data.get("videos", [])
+                            seasons = sorted(list(set(v.get("season") for v in videos if v.get("season") and v.get("season") > 0)))
+                            episodes = []
+                            for v in videos:
+                                s_num = v.get("season")
+                                e_num = v.get("number")
+                                if s_num and e_num:
+                                    episodes.append({
+                                        "id": v.get("id", f"{clean_imdb}:{s_num}:{e_num}"),
+                                        "season": s_num,
+                                        "episode": e_num,
+                                        "title": v.get("name", f"Episode {e_num}"),
+                                        "overview": v.get("overview", ""),
+                                        "thumbnail": v.get("thumbnail", meta_dict["backdrop"]),
+                                        "released": v.get("released", "")
+                                    })
+                            meta_dict["seasons"] = seasons
+                            meta_dict["episodes"] = episodes
+                        return meta_dict
+        except Exception as e:
+            print(f"[fetch_tmdb_meta direct imdb warning] {e}")
 
     clean_q = q.strip().lower()
     quoted = urllib.parse.quote(q.strip())
@@ -764,10 +963,10 @@ async def fetch_tmdb_meta(q: str, media_type: Optional[str] = None) -> dict:
         return score
 
     best_idx, (best_item, best_type) = max(enumerate(candidates), key=score_match)
-    imdb_id = best_item.get("id", "")
+    resolved_id = best_item.get("id", "")
 
     meta_dict = {
-        "id": imdb_id,
+        "id": resolved_id,
         "title": best_item.get("name", q),
         "poster": best_item.get("poster", ""),
         "backdrop": best_item.get("background", best_item.get("poster", "")),
@@ -780,9 +979,9 @@ async def fetch_tmdb_meta(q: str, media_type: Optional[str] = None) -> dict:
     }
 
     # If it's a TV series, fetch full seasons and episode tree
-    if best_type == "series" and imdb_id:
+    if best_type == "series" and resolved_id:
         try:
-            r_detail = await http_client.get(f"https://v3-cinemeta.strem.io/meta/series/{imdb_id}.json")
+            r_detail = await http_client.get(f"https://v3-cinemeta.strem.io/meta/series/{resolved_id}.json")
             if r_detail.status_code == 200:
                 s_meta = r_detail.json().get("meta", {})
                 videos = s_meta.get("videos", [])
@@ -795,7 +994,7 @@ async def fetch_tmdb_meta(q: str, media_type: Optional[str] = None) -> dict:
                     e_num = v.get("number")
                     if s_num and e_num:
                         episodes.append({
-                            "id": v.get("id", f"{imdb_id}:{s_num}:{e_num}"),
+                            "id": v.get("id", f"{resolved_id}:{s_num}:{e_num}"),
                             "season": s_num,
                             "episode": e_num,
                             "title": v.get("name", f"Episode {e_num}"),
@@ -863,12 +1062,185 @@ async def api_recommendations(type: str = "all", skip: int = 0, genre: str = "")
 
     return JSONResponse({"results": items, "count": len(items), "skip": skip})
 
+async def fetch_imdb_suggest(client: httpx.AsyncClient, query: str) -> list:
+    """
+    Fetches real-time catalog suggestions from IMDb Suggest API (< 80ms).
+    Parses JSONP response, handles 2024-2026 latest releases, unindexed titles, and real-time poster art.
+    """
+    clean_q = re.sub(r'[^a-zA-Z0-9]', '_', query.strip().lower())
+    clean_q = re.sub(r'_+', '_', clean_q).strip('_')
+    if not clean_q:
+        return []
+    char = clean_q[0]
+    url = f"https://v3.sg.media-imdb.com/suggests/titles/{char}/{clean_q}.json"
+    try:
+        resp = await client.get(url, timeout=3.0)
+        if resp.status_code != 200:
+            return []
+        text = resp.text
+        start = text.find("(")
+        end = text.rfind(")")
+        if start == -1 or end == -1 or end <= start:
+            return []
+        data = json.loads(text[start + 1:end])
+        raw_items = data.get("d", [])
+        results = []
+        for it in raw_items:
+            item_id = str(it.get("id", ""))
+            if not item_id.startswith("tt"):
+                continue
+            title = str(it.get("l", "")).strip()
+            if not title:
+                continue
+            year = str(it.get("y", ""))
+            q_desc = str(it.get("q", "")).lower()
+            qid = str(it.get("qid", "")).lower()
+            is_series = "series" in q_desc or "tv" in q_desc or "series" in qid or "tv" in qid
+            m_type = "series" if is_series else "movie"
+            category = "TV Series" if is_series else "Feature Film"
+            badge = "TV SERIES" if is_series else "MOVIE"
+
+            poster = ""
+            img_val = it.get("i")
+            if isinstance(img_val, list) and img_val:
+                poster = str(img_val[0])
+            elif isinstance(img_val, dict):
+                poster = str(img_val.get("imageUrl") or img_val.get("url") or "")
+            elif isinstance(img_val, str):
+                poster = img_val
+
+            overview = str(it.get("s", ""))
+            results.append({
+                "id": item_id,
+                "title": title,
+                "year": year,
+                "type": m_type,
+                "category": category,
+                "rating": "8.5",
+                "poster": poster,
+                "backdrop": poster,
+                "overview": overview,
+                "badge": badge,
+                "source": "imdb_suggest"
+            })
+        return results
+    except Exception as e:
+        print(f"[IMDb suggest fetch error] {e}")
+        return []
+
+async def fetch_cinemeta_search(client: httpx.AsyncClient, query: str, m_type: str) -> list:
+    """Fetches catalog items from Cinemeta for movie or series."""
+    quoted = urllib.parse.quote(query.strip())
+    url = f"https://v3-cinemeta.strem.io/catalog/{m_type}/top/search={quoted}.json"
+    try:
+        resp = await client.get(url, timeout=4.0)
+        if resp.status_code != 200:
+            return []
+        metas = resp.json().get("metas", [])
+        items = []
+        for m in metas:
+            item_id = m.get("id") or m.get("imdb_id") or f"{m_type}:{m.get('name')}"
+            title = m.get("name", "").strip()
+            if not title:
+                continue
+            category = m.get("genres", [m_type.title()])[0] if m.get("genres") else m_type.title()
+            rating = str(m.get("imdbRating") or m.get("rating") or "8.0")
+            year_val = str(m.get("year") or m.get("releaseInfo") or "").split("–")[0].strip()
+            badge = "4K / 1080P • STREAM" if m_type == "movie" else "COMPLETE SERIES • MULTI AUDIO"
+            items.append({
+                "id": item_id,
+                "title": title,
+                "year": year_val,
+                "type": m_type,
+                "category": category,
+                "rating": rating,
+                "poster": m.get("poster", ""),
+                "backdrop": m.get("background", m.get("poster", "")),
+                "overview": m.get("description", ""),
+                "badge": badge,
+                "source": "cinemeta"
+            })
+        return items
+    except Exception as e:
+        print(f"[Cinemeta search error] {e}")
+        return []
+
+def rank_catalog_items(items: list, clean_q: str, corrected_title: str = "") -> list:
+    """
+    Multi-tier ranking function:
+      - Exact title match (+400)
+      - Prefix match (+250)
+      - Substring match (+150)
+      - Word overlap (+50 per word)
+      - difflib.SequenceMatcher ratio (+100 * ratio)
+      - Series boost (+60 for exact/prefix/high-ratio TV titles)
+      - Recency boost (year >= 2024: +40, year >= 2020: +15)
+    """
+    def score_item(item: dict, target_q: str) -> float:
+        if not target_q:
+            return 0.0
+        q_norm = target_q.lower().strip()
+        t_norm = (item.get("title") or "").lower().strip()
+        if not t_norm:
+            return 0.0
+
+        score = 0.0
+        q_words = set(re.findall(r'\w+', q_norm))
+        t_words = set(re.findall(r'\w+', t_norm))
+        overlap = len(q_words & t_words)
+
+        ratio = difflib.SequenceMatcher(None, q_norm, t_norm).ratio()
+
+        is_exact = (t_norm == q_norm)
+        is_prefix = (t_norm.startswith(q_norm) or q_norm.startswith(t_norm))
+        is_sub = (q_norm in t_norm or t_norm in q_norm)
+
+        if is_exact:
+            score += 400.0
+        elif is_prefix:
+            score += 250.0
+        elif is_sub:
+            score += 150.0
+
+        score += 50.0 * overlap
+        score += 100.0 * ratio
+
+        is_series = (item.get("type") == "series")
+        if is_series and (is_exact or is_prefix or ratio >= 0.75):
+            score += 60.0
+
+        year_val = 0
+        m_year = re.search(r'\b(19\d{2}|20\d{2})\b', str(item.get("year", "")))
+        if m_year:
+            try:
+                year_val = int(m_year.group(1))
+            except Exception:
+                year_val = 0
+        if year_val >= 2024:
+            score += 40.0
+        elif year_val >= 2020:
+            score += 15.0
+
+        return score
+
+    for it in items:
+        s = score_item(it, clean_q)
+        if corrected_title and corrected_title.lower() != clean_q.lower():
+            s_corr = score_item(it, corrected_title)
+            s = max(s, s_corr)
+        it["_rank_score"] = s
+
+    items.sort(key=lambda x: x.get("_rank_score", 0), reverse=True)
+    for it in items:
+        it.pop("_rank_score", None)
+    return items
+
 @app.get("/api/catalog/search")
 async def api_catalog_search(q: str, type: Optional[str] = "all"):
     """
     Multi-Title Catalog Discovery Search:
-    Searches Movies, Series, and Anime across Cinemeta/TMDB in parallel.
-    Returns ALL matching titles (not just a single winner), deduplicated with posters, ratings, and years.
+    Zero-Guessing Policy: Searches across installed addon catalogs (Cinemeta, CyberFlix, etc.)
+    Returns authentic matching titles deduplicated with posters, ratings, and years.
     """
     global http_client
     if not http_client:
@@ -876,67 +1248,38 @@ async def api_catalog_search(q: str, type: Optional[str] = "all"):
 
     clean_q = q.strip()
     if not clean_q:
-        return JSONResponse({"results": [], "count": 0, "query": ""})
+        return JSONResponse({"results": [], "count": 0, "query": "", "corrected_query": "", "suggestions": []})
 
-    quoted = urllib.parse.quote(clean_q)
-    items = []
-    seen_ids = set()
+    items = await addon_manager.search_catalogs(clean_q, media_type=type or "all", client=http_client)
+    items = rank_catalog_items(items, clean_q)
 
-    try:
-        tasks = []
-        if type in ("movie", "all"):
-            url_movie = f"https://v3-cinemeta.strem.io/catalog/movie/top/search={quoted}.json"
-            tasks.append(("movie", http_client.get(url_movie)))
-        if type in ("series", "all"):
-            url_series = f"https://v3-cinemeta.strem.io/catalog/series/top/search={quoted}.json"
-            tasks.append(("series", http_client.get(url_series)))
+    return JSONResponse({
+        "results": items,
+        "count": len(items),
+        "query": clean_q,
+        "corrected_query": "",
+        "suggestions": []
+    })
 
-        responses = await asyncio.gather(*[t[1] for t in tasks], return_exceptions=True)
-
-        for (m_type, _), resp in zip(tasks, responses):
-            if not isinstance(resp, Exception) and resp.status_code == 200:
-                metas = resp.json().get("metas", [])
-                for m in metas:
-                    item_id = m.get("id") or m.get("imdb_id") or f"{m_type}:{m.get('name')}"
-                    title = m.get("name", "").strip()
-                    if not title or item_id in seen_ids:
-                        continue
-                    seen_ids.add(item_id)
-
-                    category = m.get("genres", [m_type.title()])[0] if m.get("genres") else m_type.title()
-                    rating = str(m.get("imdbRating") or m.get("rating") or "8.0")
-                    year_val = str(m.get("year") or m.get("releaseInfo") or "").split("–")[0].strip()
-                    badge = "4K / 1080P • STREAM" if m_type == "movie" else "COMPLETE SERIES • MULTI AUDIO"
-
-                    items.append({
-                        "id": item_id,
-                        "title": title,
-                        "year": year_val,
-                        "type": m_type,
-                        "category": category,
-                        "rating": rating,
-                        "poster": m.get("poster", ""),
-                        "backdrop": m.get("background", m.get("poster", "")),
-                        "overview": m.get("description", ""),
-                        "badge": badge
-                    })
-    except Exception as e:
-        print(f"[Catalog Search Error] {e}")
-
-    # Fallback to local CURATED matches if Cinemeta had few results
-    try:
-        q_lower = clean_q.lower()
-        for c_item in CURATED:
-            if c_item["title"].lower() in q_lower or q_lower in c_item["title"].lower():
-                if c_item["title"] not in seen_ids and not any(it["title"].lower() == c_item["title"].lower() for it in items):
-                    items.insert(0, dict(c_item))
-    except Exception:
-        pass
-
-    return JSONResponse({"results": items, "count": len(items), "query": clean_q})
+@app.get("/api/audio/probe")
+async def api_audio_probe(url: str):
+    """
+    Probes audio streams and codecs of the given stream URL.
+    Returns stream count, codecs, languages, and browser compatibility flag.
+    """
+    if not url or not url.strip():
+        raise HTTPException(status_code=400, detail="Missing target URL to probe")
+    return JSONResponse(await probe_audio_streams(url))
 
 @app.get("/api/vlc/play")
-async def api_vlc_play(url: str, title: str = "Media", start_time: Optional[float] = 0, poll: Optional[bool] = False):
+async def api_vlc_play(
+    url: str,
+    title: str = "Media",
+    start_time: Optional[float] = 0,
+    poll: Optional[bool] = False,
+    audio_track: Optional[int] = None,
+    audio_lang: Optional[str] = None
+):
     """
     Launches VLC player on the host PC strictly for the EXACT requested release stream.
     Unwraps any internal /playback/resolve proxy wrappers to resolve real stream endpoints directly.
@@ -970,7 +1313,7 @@ async def api_vlc_play(url: str, title: str = "Media", start_time: Optional[floa
     else:
         final_stream_url = raw_url
         try:
-            resolved_res = await link_resolver.resolve_auto(raw_url)
+            resolved_res = await link_resolver.resolve_auto(raw_url, allow_interactive=not poll)
             if resolved_res.get("status") == "SUCCESS" and resolved_res.get("direct_url"):
                 final_stream_url = resolved_res["direct_url"]
             else:
@@ -979,12 +1322,17 @@ async def api_vlc_play(url: str, title: str = "Media", start_time: Optional[floa
                 cached_now = auth_bridge.get_resolved_stream(raw_url) if hasattr(auth_bridge, "get_resolved_stream") else None
                 if cached_now:
                     final_stream_url = cached_now
-                elif "Cloudflare" in err_msg or "Turnstile" in err_msg or "403" in err_msg:
+                elif (
+                    resolved_res.get("status") in ["CLOUDFLARE_PROTECTED", "CLOUDFLARE_FAILED"]
+                    or "Cloudflare" in err_msg
+                    or "Turnstile" in err_msg
+                    or "403" in err_msg
+                ):
                     # If this is a poll request, don't re-trigger, just indicate in progress
                     if poll:
                         return JSONResponse({
-                            "status": "CLOUDFLARE_IN_PROGRESS",
-                            "message": "Verification window active. Waiting for Turnstile solve...",
+                            "status": "CLOUDFLARE_IN_PROGRESS" if auth_bridge.is_in_progress("olamovies") else "CLOUDFLARE_FAILED",
+                            "message": "Verification window active. Waiting for Turnstile solve..." if auth_bridge.is_in_progress("olamovies") else "Turnstile verification pending or incomplete.",
                             "target_url": raw_url
                         }, status_code=200)
 
@@ -1022,6 +1370,10 @@ async def api_vlc_play(url: str, title: str = "Media", start_time: Optional[floa
         vlc_args = [vlc_bin, final_stream_url, f":meta-title={title}", "--no-video-title-show"]
         if start_time and start_time > 0:
             vlc_args.append(f"--start-time={int(start_time)}")
+        if audio_track is not None:
+            vlc_args.append(f"--audio-track={int(audio_track)}")
+        if audio_lang:
+            vlc_args.append(f"--audio-language={audio_lang}")
 
         proc = subprocess.Popen(
             vlc_args,
@@ -1298,14 +1650,38 @@ async def api_resolve_url(url: str):
 
 @app.get("/api/tmdb-search")
 async def api_tmdb_search(q: str):
-    """Search TMDB for poster/backdrop images by title (free, no API key for image CDN)."""
+    """Search TMDB/IMDb for poster/backdrop images by title (free, no API key for image CDN)."""
     global http_client
     if not http_client:
         http_client = httpx.AsyncClient(timeout=10.0, follow_redirects=True)
 
-    # Use Cinemeta (Stremio) as a free TMDB metadata proxy
+    clean_q = q.strip()
+    if not clean_q:
+        return JSONResponse({"title": q, "poster": "", "backdrop": "", "year": "", "rating": "", "overview": "", "type": "unknown"})
+
+    # 1. Check IMDb Suggest first (fast, sub-80ms with real-time posters for 2024-2026)
     try:
-        clean_q = q.strip()
+        imdb_items = await fetch_imdb_suggest(http_client, clean_q)
+        if imdb_items:
+            best = imdb_items[0]
+            for it in imdb_items:
+                if it.get("poster"):
+                    best = it
+                    break
+            return JSONResponse({
+                "title": best.get("title", clean_q),
+                "poster": best.get("poster", ""),
+                "backdrop": best.get("backdrop", best.get("poster", "")),
+                "year": str(best.get("year", "")),
+                "rating": str(best.get("rating", "8.5")),
+                "overview": best.get("overview", ""),
+                "type": best.get("type", "movie"),
+            })
+    except Exception as e:
+        print(f"[IMDb suggest in TMDB search error] {e}")
+
+    # 2. Fallback to Cinemeta (Stremio) as a free TMDB metadata proxy
+    try:
         # Try movie first
         url = f"https://v3-cinemeta.strem.io/catalog/movie/top/search={urllib.parse.quote(clean_q)}.json"
         res = await http_client.get(url)

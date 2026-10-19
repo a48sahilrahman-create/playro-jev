@@ -3,9 +3,10 @@ import time
 from curl_cffi import requests
 from bs4 import BeautifulSoup
 
-def test_driveseed():
+def test_driveseed(url=None):
     s = requests.Session(impersonate='chrome120')
-    url = 'https://cloud.unblockedgames.world/?sid=aDBQeDhZNVBsY1I5cVlWUzJJM1pvc3lPMUw2ZjY1MzZjQ0s2MnFuM3BQS3B1R2w1ZjhIY1NXKzhXbEVsMjVsbg=='
+    if not url:
+        url = 'https://cloud.unblockedgames.world/?sid=a3Y4azk3STZ5RVphb1c0d0pkeDllaWVjc3NTd1dyeHJZSlNRUkszSnJFSGphampKSXNSZWwrcG5LYTJEYkE2UkZIZjJJc3VDQ1hhdW9jVTJmTTFzU29PMlFKZ0MzTmhvSC9NWEh6a0Z2T2MzWlhheUgxdzBURHNmME8xOFF0RkttbEp5aFg4VFFmMjVNWC9LSThQcW9qaUpJMS9BVVh2bGxmR2w3SURnbkFVMVk1emxkSDhuVnIzbjNZY0syOGNmc3BxT2JDWGZMZjlxbnd4OFU2TDFZMVNhcW96a1ZIZUQxa2xHeGdxUXQ5TUx5dmVBa3FlZmhXd2pZMHRjSkhzRA=='
 
     t0 = time.perf_counter()
     print(f"[*] Fetching Step 1: {url}")
@@ -56,10 +57,25 @@ def test_driveseed():
         text = a.get_text(strip=True)
         print(f"  Link: {href} -> {text}")
 
+    # Check for meta refresh redirect
+    meta_ref = re.search(r'content=["\'][^"\']*url=([^"\'>\s]+)', r4.text, re.I)
+    dest_url = meta_ref.group(1) if meta_ref else None
+    if dest_url:
+        print(f"[+] Extracted Destination URL: {dest_url}")
+
     # Check for direct downloads
     directs = re.findall(r'https?://(?:video-downloads\.googleusercontent\.com|video-seed\.dev|pub-[a-zA-Z0-9]+\.r2\.dev|pixeldrain\.(?:com|dev)/api/file)/[^\s\'"<>]+', r4.text)
     print(f"[+] Direct URLs found: {directs}")
-    print(f"[+] Total Bypass Time: {round((time.perf_counter() - t0)*1000, 2)} ms")
+    total_time_ms = round((time.perf_counter() - t0) * 1000, 2)
+    print(f"[+] Total Bypass Time: {total_time_ms} ms")
+    return {
+        "status_code": r4.status_code,
+        "cookie_name": c_name,
+        "cookie_val": c_val,
+        "dest_url": dest_url,
+        "directs": directs,
+        "time_ms": total_time_ms
+    }
 
 if __name__ == '__main__':
     test_driveseed()

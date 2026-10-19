@@ -4,6 +4,8 @@ Covers:
   1. UHDMovies (DriveSeed / Google CDN)
   2. VegaMovies (V-Cloud / Pixeldrain API / Cloudflare R2)
   3. HDHub4u (HubCloud / Gamerxyt / R2)
+  4. 4KHDHub (HubCloud / HubDrive / GreenMotors)
+  5. OlaMovies (Next.js SSR / Direct Links)
 """
 
 import sys
@@ -12,6 +14,7 @@ import asyncio
 import re
 import json
 import urllib.parse
+from typing import Optional, List, Dict, Any
 import httpx
 from bs4 import BeautifulSoup
 from parallel_dispatcher import is_strict_match
@@ -156,8 +159,23 @@ class FastScrapers:
                                 if detected_res == "4K":
                                     detected_res = "2160P"
 
-                                ep_m = re.search(r'\b(Episode\s*\d+|Ep\s*\d+|E\d{1,2})\b', label, re.I)
-                                ep_tag = f"{season_tag} {ep_m.group(1).title()}" if (season_tag and ep_m) else (ep_m.group(1).title() if ep_m else "")
+                                ep_m = re.search(r'\b(Episode\s*0*(\d{1,3})|Ep\s*0*(\d{1,3})|E0*(\d{1,3}))\b', label, re.I)
+                                is_range = bool(re.search(r'(?:episodes?|ep|e)\s*\d+\s*-\s*\d+', label, re.I))
+                                is_batch_kw = any(k in label.lower() for k in ["batch", "zip", "pack", "full season", "all episodes", "complete"]) or bool(re.search(r'\b(batch|zip|pack|full\s*season|all\s*episodes|complete\s*(?:series|season|batch|pack)|s\d+\s*-\s*s\d+|season\s*\d+\s*zip)\b', label, re.I))
+
+                                s_num_m = re.search(r'\d+', season_tag)
+                                s_num = int(s_num_m.group(0)) if s_num_m else 1
+
+                                if ep_m and not (is_range or is_batch_kw):
+                                    e_val = int(ep_m.group(2) or ep_m.group(3) or ep_m.group(4))
+                                    ep_tag = f"S{s_num:02d}E{e_val:02d}"
+                                    is_batch = False
+                                elif is_batch_kw or is_range:
+                                    ep_tag = f"S{s_num:02d} Batch"
+                                    is_batch = True
+                                else:
+                                    is_batch = bool(any(k in context_text.lower() for k in ["batch", "zip", "pack", "full season", "all episodes"]))
+                                    ep_tag = f"S{s_num:02d} Batch" if is_batch and season_tag else (season_tag or "")
 
                                 post_results.append({
                                     "platform": "UHDMovies",
@@ -169,6 +187,7 @@ class FastScrapers:
                                     "size": detected_size or "Unknown",
                                     "audio": "English Atmos / Dual" if "Dual" in context_text or "Hindi" in context_text else "Original",
                                     "target_url": href,
+                                    "is_batch": is_batch,
                                     "source_id": "uhd_res"
                                 })
 
@@ -205,7 +224,210 @@ class FastScrapers:
 
         return results
 
-    async def search_vegamovies(self, client: httpx.AsyncClient, query: str) -> list:
+    async def search_4khdhub(self, client: httpx.AsyncClient, query: str, season: Optional[int] = None, episode: Optional[int] = None) -> list:
+        """Fast search & discrete episode catalog extraction on 4KHDHub (< 450ms)."""
+        clean = query.strip()
+        encoded_query = urllib.parse.quote_plus(clean)
+        url = f"https://4khdhub.one/?s={encoded_query}"
+        results = []
+
+        try:
+            resp = await client.get(url, headers=DEFAULT_HEADERS, follow_redirects=True, timeout=4.0)
+            if resp.status_code == 200:
+                soup = BeautifulSoup(resp.text, "lxml")
+
+                # Extract candidate post cards
+                candidate_posts = []
+                cards = soup.find_all("a", href=True)
+                seen_hrefs = set()
+
+                for a in cards:
+                    href = a.get("href", "")
+                    if not href or href in seen_hrefs or href == "#" or any(k in href for k in ["/category/", "/tag/", "/genre/", "/author/"]):
+                        continue
+
+                    is_card = bool("movie-card" in a.get("class", []) or re.search(r'/[a-zA-Z0-9_-]+(?:series|movie|\d+)[^/]*/?$', href))
+                    if not is_card:
+                        continue
+
+                    t_el = a.find(class_=re.compile(r'title|heading'))
+                    post_title = t_el.get_text(strip=True) if t_el else (a.get("aria-label", "") or a.get_text(" ", strip=True))
+                    post_title = re.sub(r'\s+details$', '', post_title, flags=re.I).strip()
+                    if not post_title or not is_strict_match(query, post_title):
+                        continue
+
+                    seen_hrefs.add(href)
+                    meta_el = a.find(class_=re.compile(r'meta|desc'))
+                    meta_text = meta_el.get_text(" ", strip=True) if meta_el else ""
+                    full_text = f"{post_title} {meta_text}"
+
+                    score = 0
+                    if season is not None:
+                        # Check season range (e.g. S01-S03)
+                        sm_range = re.search(r'S(\d{1,2})\s*-\s*S?(\d{1,2})', full_text, re.I)
+                        if sm_range:
+                            s_start, s_end = int(sm_range.group(1)), int(sm_range.group(2))
+                            if s_start <= season <= s_end:
+                                score += 50
+                        elif re.search(rf'\b(?:Season\s*{season}|S0*{season})\b', full_text, re.I):
+                            score += 50
+                        elif any(k in full_text.lower() for k in ["all seasons", "complete", "series"]):
+                            score += 20
+                        else:
+                            conflicts = re.findall(r'\b(?:Season\s*(\d+)|S(\d{1,2}))\b', full_text, re.I)
+                            if conflicts and all(int(c[0] or c[1]) != season for c in conflicts):
+                                score -= 30
+                    candidate_posts.append((score, post_title, href))
+
+                candidate_posts.sort(key=lambda x: x[0], reverse=True)
+                selected_posts = [p for p in candidate_posts if p[0] >= 0][:2] or candidate_posts[:1]
+
+                async def fetch_4khd_post(post_title, post_path):
+                    post_url = post_path if post_path.startswith("http") else f"https://4khdhub.one{post_path}"
+                    post_results = []
+                    try:
+                        p_resp = await client.get(post_url, headers=DEFAULT_HEADERS, follow_redirects=True, timeout=4.0)
+                        if p_resp.status_code == 200:
+                            p_soup = BeautifulSoup(p_resp.text, "lxml")
+
+                            # 1. Primary: Parse discrete episode download items
+                            ep_items = p_soup.find_all("div", class_="episode-download-item")
+                            seen_links = set()
+
+                            for ep_div in ep_items:
+                                f_title_el = ep_div.find(class_=re.compile(r'file-title|title'))
+                                f_title = f_title_el.get_text(strip=True) if f_title_el else ""
+                                info_el = ep_div.find(class_=re.compile(r'file-info|info'))
+                                info_text = info_el.get_text(" ", strip=True) if info_el else ""
+                                full_ctx = f"{f_title} {info_text}"
+
+                                # Detect season and episode
+                                s_num = None
+                                e_num = None
+                                se_m = re.search(r'\bS(\d{1,2})\s*[-._ ]?E(\d{1,3})\b', full_ctx, re.I)
+                                if se_m:
+                                    s_num = int(se_m.group(1))
+                                    e_num = int(se_m.group(2))
+                                else:
+                                    s_m = re.search(r'\b(?:Season|S)\s*0*(\d{1,2})\b', full_ctx, re.I)
+                                    if not s_m:
+                                        s_item = ep_div.find_parent(class_=re.compile(r'season-item|episode-item'))
+                                        s_num_el = s_item.find(class_="episode-number") if s_item else None
+                                        if s_num_el:
+                                            s_m = re.search(r'\bS?(\d{1,2})\b', s_num_el.get_text(strip=True), re.I)
+                                    s_num = int(s_m.group(1)) if s_m else (season if season is not None else 1)
+
+                                    ep_m = re.search(r'\b(?:Episode|Ep|E)[-\s]*0*(\d{1,3})\b', full_ctx, re.I)
+                                    e_num = int(ep_m.group(1)) if ep_m else None
+
+                                if season is not None and s_num != season:
+                                    continue
+                                if episode is not None and (e_num is None or e_num != episode):
+                                    continue
+
+                                sz_el = ep_div.find(class_=re.compile(r'badge-size|size'))
+                                sz = sz_el.get_text(strip=True) if sz_el else ""
+                                if not sz:
+                                    sm_sz = re.search(r'\[?(\d+(?:\.\d+)?\s*(?:GB|MB))\]?', full_ctx, re.I)
+                                    sz = sm_sz.group(1).upper() if sm_sz else "Unknown"
+
+                                res_m = re.search(r'(2160p|4K|1080p|720p|480p)', full_ctx, re.I)
+                                detected_res = res_m.group(1).upper() if res_m else "1080P"
+                                if detected_res == "4K":
+                                    detected_res = "2160P"
+
+                                codec = "HEVC 10-bit" if any(k in full_ctx.upper() for k in ["HEVC", "H.265", "H265", "10BIT", "X265"]) else "x264"
+                                audio = "Dual Audio" if any(k in full_ctx.lower() for k in ["hindi", "dual"]) else "English"
+
+                                d_links = ep_div.find_all("a", href=re.compile(r'hubcloud|hubdrive|greenmotors'))
+                                for dl in d_links:
+                                    href = dl["href"]
+                                    if href in seen_links:
+                                        continue
+                                    seen_links.add(href)
+                                    dl_label = dl.get_text(strip=True) or "Download"
+                                    ep_tag = f"S{s_num:02d}E{e_num:02d}" if e_num is not None else f"S{s_num:02d}"
+                                    post_results.append({
+                                        "platform": "4KHDHub",
+                                        "title": f"{post_title} Season {s_num}".strip(),
+                                        "label": f"{ep_tag} [{detected_res}] {sz} - {dl_label}".strip(" -"),
+                                        "episode_tag": ep_tag,
+                                        "resolution": detected_res,
+                                        "codec": codec,
+                                        "size": sz,
+                                        "audio": audio,
+                                        "target_url": href,
+                                        "is_batch": False,
+                                        "source_id": "4khd_ep"
+                                    })
+
+                            # 2. Secondary fallback: Generic HubCloud / GreenMotors links if discrete items missing
+                            if not post_results:
+                                all_dls = p_soup.find_all("a", href=re.compile(r'hubcloud|hubdrive|greenmotors'))
+                                for dl in all_dls:
+                                    href = dl["href"]
+                                    if href in seen_links:
+                                        continue
+                                    seen_links.add(href)
+                                    label = dl.get_text(strip=True) or dl.find_parent().get_text(strip=True)
+                                    prev_h = dl.find_previous(["h2", "h3", "h4", "h5", "p", "div"])
+                                    ctx = prev_h.get_text(" ", strip=True) if prev_h else ""
+                                    combo = f"{label} {ctx}"
+
+                                    s_num = None
+                                    e_num = None
+                                    se_m = re.search(r'\bS(\d{1,2})\s*[-._ ]?E(\d{1,3})\b', combo, re.I)
+                                    if se_m:
+                                        s_num = int(se_m.group(1))
+                                        e_num = int(se_m.group(2))
+                                    else:
+                                        s_m = re.search(r'\b(?:Season|S)\s*0*(\d{1,2})\b', combo, re.I)
+                                        s_num = int(s_m.group(1)) if s_m else (season if season is not None else 1)
+                                        ep_m = re.search(r'\b(?:Episode|Ep|E)[-\s]*0*(\d{1,3})\b', combo, re.I)
+                                        e_num = int(ep_m.group(1)) if ep_m else None
+
+                                    is_batch_kw = any(k in combo.lower() for k in ["batch", "zip", "pack", "full season", "all episodes"])
+                                    if episode is not None and (e_num is None or e_num != episode or is_batch_kw):
+                                        continue
+                                    if season is not None and s_num != season:
+                                        continue
+
+                                    ep_tag = f"S{s_num:02d}E{e_num:02d}" if e_num is not None else (f"S{s_num:02d} Batch" if is_batch_kw else "")
+                                    res_m = re.search(r'(2160p|4K|1080p|720p|480p)', combo, re.I)
+                                    detected_res = res_m.group(1).upper() if res_m else "1080P"
+                                    if detected_res == "4K":
+                                        detected_res = "2160P"
+                                    sz_m = re.search(r'\[?(\d+(?:\.\d+)?\s*(?:GB|MB))\]?', combo, re.I)
+                                    sz = sz_m.group(1).upper() if sz_m else "Unknown"
+
+                                    post_results.append({
+                                        "platform": "4KHDHub",
+                                        "title": f"{post_title} Season {s_num}".strip(),
+                                        "label": f"{ep_tag or post_title} [{detected_res}] - {label[:50]}".strip(),
+                                        "episode_tag": ep_tag,
+                                        "resolution": detected_res,
+                                        "codec": "HEVC" if "HEVC" in combo.upper() else "x264",
+                                        "size": sz,
+                                        "audio": "Dual Audio" if "hindi" in combo.lower() or "dual" in combo.lower() else "Original",
+                                        "target_url": href,
+                                        "is_batch": bool(is_batch_kw),
+                                        "source_id": "4khd_res"
+                                    })
+                    except Exception:
+                        pass
+                    return post_results
+
+                fetch_tasks = [fetch_4khd_post(title, path) for _, title, path in selected_posts]
+                task_lists = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+                for tl in task_lists:
+                    if isinstance(tl, list):
+                        results.extend(tl)
+        except Exception:
+            pass
+
+        return results
+
+    async def search_vegamovies(self, client: httpx.AsyncClient, query: str, season: Optional[int] = None, episode: Optional[int] = None) -> list:
         """Fast search & catalog parsing on VegaMovies via ts-search.php (< 200ms)."""
         clean = query.strip()
         vega_mirror = await get_active_mirror("vegamovies")
@@ -213,11 +435,34 @@ class FastScrapers:
         results = []
 
         try:
-            resp = await client.get(url, headers=DEFAULT_HEADERS, timeout=1.8)
+            resp = await client.get(url, headers=DEFAULT_HEADERS, timeout=2.0)
             if resp.status_code == 200:
                 await report_mirror_success("vegamovies")
                 data = resp.json()
                 hits = data.get("hits", [])
+
+                if season is not None:
+                    def score_vega_hit(h):
+                        doc = h.get("document", {})
+                        t = (doc.get("post_title", "") + " " + doc.get("permalink", "")).lower()
+                        score = 0
+                        s_patterns = [f"season {season}", f"season {season:02d}", f"s{season:02d}", f"s{season}"]
+                        if any(re.search(rf'\b{re.escape(sp)}\b', t) for sp in s_patterns):
+                            score += 100
+                        elif "all seasons" in t or "all episodes" in t or "complete" in t:
+                            score += 50
+                        else:
+                            conflicts = re.findall(r'\b(?:season\s*(\d+)|s(\d{1,2}))\b', t)
+                            for c in conflicts:
+                                c_num = int(c[0] or c[1])
+                                if c_num != season:
+                                    score -= 100
+                                    break
+                        return score
+
+                    hits.sort(key=score_vega_hit, reverse=True)
+                    target_hits = [h for h in hits if score_vega_hit(h) >= 0]
+                    hits = target_hits if target_hits else hits
 
                 async def fetch_vega_post(h):
                     doc = h.get("document", {})
@@ -233,7 +478,7 @@ class FastScrapers:
                             if p_resp.status_code == 200:
                                 await report_mirror_success("vegamovies")
                                 p_soup = BeautifulSoup(p_resp.text, "lxml")
-                                buttons = p_soup.find_all("a", href=re.compile(r'nexdrive|vcloud|fast-dl|v-cloud|hubcloud'))
+                                buttons = p_soup.find_all("a", href=re.compile(r'nexdrive|vcloud|fast-dl|v-cloud|hubcloud|greenmotors'))
                                 for btn in buttons:
                                     label = btn.get_text(strip=True) or btn.find_parent().get_text(strip=True)
                                     href = btn["href"]
@@ -250,60 +495,107 @@ class FastScrapers:
                                         if any(k in pt.lower() for k in ["2160p", "4k", "1080p", "720p", "480p", "gb", "mb"]):
                                             context_text = f"{pt} {label}"
 
+                                    if not season_tag:
+                                        sm_pt = re.search(r'\b(Season\s*\d+|S\d{1,2})\b', post_title, re.I)
+                                        if sm_pt:
+                                            season_tag = sm_pt.group(1).title()
+
+                                    s_num_m = re.search(r'\d+', season_tag)
+                                    s_num = int(s_num_m.group(0)) if s_num_m else (season if season is not None else 1)
+
+                                    if season is not None and s_num != season:
+                                        continue
+
                                     if season_tag and season_tag.lower() not in context_text.lower():
                                         context_text = f"{season_tag} {context_text}"
 
                                     res_m = re.search(r'(2160p|4K|1080p|720p|480p)', context_text, re.I)
-                                    size_m = re.search(r'(\d+(?:\.\d+)?\s*(?:GB|MB))', context_text, re.I)
+                                    size_m = re.search(r'\[?(\d+(?:\.\d+)?\s*(?:GB|MB)(?:\s*/\s*E)?)\]?', context_text, re.I)
                                     detected_res = res_m.group(1).upper() if res_m else ("4K/UHD" if "2160" in post_title else "1080P")
-                                    detected_size = size_m.group(1).upper() if size_m else "Unknown"
+                                    if detected_res == "4K":
+                                        detected_res = "2160P"
+                                    detected_size = size_m.group(1).upper().strip("[] ") if size_m else "Unknown"
+
+                                    # Check button label directly for per-episode size (e.g. [570MB/E])
+                                    sm_lbl = re.search(r'\[?(\d+(?:\.\d+)?\s*(?:GB|MB)(?:\s*/\s*E)?)\]?', label, re.I)
+                                    if sm_lbl:
+                                        detected_size = sm_lbl.group(1).upper().strip("[] ")
+
+                                    is_range = bool(re.search(r'(?:episodes?|ep|e)\s*\d+\s*-\s*\d+', label, re.I))
+                                    is_batch_kw = any(k in label.lower() for k in ["batch", "zip", "pack", "full season", "all episodes", "complete"]) or bool(re.search(r'\b(batch|zip|pack|full\s*season|all\s*episodes|complete\s*(?:series|season|batch|pack)|s\d+\s*-\s*s\d+|season\s*\d+\s*zip)\b', label, re.I))
+                                    is_batch = is_batch_kw or is_range
 
                                     # If intermediate episode links hub, recursively parse individual episodes
-                                    if "episode" in label.lower() or "single" in label.lower():
+                                    hub_parsed = False
+                                    if ("episode" in label.lower() or "single" in label.lower()) and not is_batch:
                                         try:
-                                            hub_resp = await client.get(href, headers=DEFAULT_HEADERS, timeout=2.0)
+                                            hub_resp = await client.get(href, headers=DEFAULT_HEADERS, follow_redirects=True, timeout=4.0)
                                             if hub_resp.status_code == 200:
                                                 hub_soup = BeautifulSoup(hub_resp.text, "lxml")
-                                                v_links = [a for a in hub_soup.find_all("a", href=True) if any(k in a["href"] for k in ["vcloud", "fast-dl", "pixeldrain", "drive"])]
+                                                v_links = [a for a in hub_soup.find_all("a", href=True) if any(k in a["href"] for k in ["vcloud", "fast-dl", "pixeldrain", "drive", "hubcloud", "greenmotors"])]
                                                 for idx, v_a in enumerate(v_links, 1):
-                                                    ep_label = f"{season_tag or 'Season 1'} Episode {idx:02d} [{detected_res}]"
+                                                    v_txt = v_a.get_text(" ", strip=True)
+                                                    ep_num_match = re.search(r'\b(?:episode|ep|e)\s*0*(\d{1,3})\b', v_txt, re.I)
+                                                    ep_idx = int(ep_num_match.group(1)) if ep_num_match else idx
+                                                    if episode is not None and ep_idx != episode:
+                                                        continue
+                                                    ep_label = f"{season_tag or f'Season {s_num}'} Episode {ep_idx:02d} [{detected_res}]"
                                                     post_results.append({
                                                         "platform": "VegaMovies",
-                                                        "title": f"{post_title} {season_tag}".strip(),
+                                                        "title": f"{post_title} {season_tag or f'Season {s_num}'}".strip(),
                                                         "label": ep_label,
-                                                        "episode_tag": f"S{season_tag[-1] if season_tag else '1'}E{idx:02d}",
+                                                        "episode_tag": f"S{s_num:02d}E{ep_idx:02d}",
                                                         "resolution": detected_res,
                                                         "codec": "HEVC 10-bit" if "HEVC" in context_text or "10BIT" in context_text.upper() else "x264",
                                                         "size": detected_size,
                                                         "audio": "Dual Audio" if "Dual" in context_text or "Hindi" in context_text else "Original",
                                                         "target_url": v_a["href"],
+                                                        "is_batch": False,
                                                         "source_id": "veg_ep"
                                                     })
+                                                if v_links:
+                                                    hub_parsed = True
                                         except Exception:
                                             pass
 
-                                    ep_m = re.search(r'\b(Episode\s*\d+|Ep\s*\d+|E\d{1,2})\b', label, re.I)
-                                    ep_tag = f"{season_tag} {ep_m.group(1).title()}" if (season_tag and ep_m) else (ep_m.group(1).title() if ep_m else "")
+                                    if not hub_parsed:
+                                        ep_m = re.search(r'\b(Episode\s*0*(\d{1,3})|Ep\s*0*(\d{1,3})|E0*(\d{1,3}))\b', label, re.I)
+                                        if ep_m and not is_batch:
+                                            e_val = int(ep_m.group(2) or ep_m.group(3) or ep_m.group(4))
+                                            if episode is not None and e_val != episode:
+                                                continue
+                                            ep_tag = f"S{s_num:02d}E{e_val:02d}"
+                                            is_batch = False
+                                        elif is_batch:
+                                            if episode is not None:
+                                                continue
+                                            ep_tag = f"S{s_num:02d} Batch"
+                                        else:
+                                            is_batch = bool(any(k in context_text.lower() for k in ["batch", "zip", "pack", "full season", "all episodes"]))
+                                            if episode is not None and is_batch:
+                                                continue
+                                            ep_tag = f"S{s_num:02d} Batch" if is_batch and season_tag else (season_tag or "")
 
-                                    post_results.append({
-                                        "platform": "VegaMovies",
-                                        "title": f"{post_title} {season_tag}".strip(),
-                                        "label": context_text[:90],
-                                        "episode_tag": ep_tag,
-                                        "resolution": detected_res,
-                                        "codec": "HEVC 10-bit" if "HEVC" in context_text or "10BIT" in context_text.upper() else "x264",
-                                        "size": detected_size,
-                                        "audio": "Dual Audio" if "Dual" in context_text or "Hindi" in context_text else "Original",
-                                        "target_url": href,
-                                        "source_id": "veg_res"
-                                    })
+                                        post_results.append({
+                                            "platform": "VegaMovies",
+                                            "title": f"{post_title} {season_tag or f'Season {s_num}'}".strip(),
+                                            "label": context_text[:90],
+                                            "episode_tag": ep_tag,
+                                            "resolution": detected_res,
+                                            "codec": "HEVC 10-bit" if "HEVC" in context_text or "10BIT" in context_text.upper() else "x264",
+                                            "size": detected_size,
+                                            "audio": "Dual Audio" if "Dual" in context_text or "Hindi" in context_text else "Original",
+                                            "target_url": href,
+                                            "is_batch": is_batch,
+                                            "source_id": "veg_res"
+                                        })
                             else:
                                 await report_mirror_failure("vegamovies", post_url)
                         except Exception:
                             await report_mirror_failure("vegamovies", post_url)
                     return post_results
 
-                vega_tasks = [fetch_vega_post(h) for h in hits[:2]]
+                vega_tasks = [fetch_vega_post(h) for h in hits[:4]]
                 vega_lists = await asyncio.gather(*vega_tasks, return_exceptions=True)
                 for vl in vega_lists:
                     if isinstance(vl, list):
@@ -315,7 +607,7 @@ class FastScrapers:
 
         return results
 
-    async def search_hdhub4u(self, client: httpx.AsyncClient, query: str) -> list:
+    async def search_hdhub4u(self, client: httpx.AsyncClient, query: str, season: Optional[int] = None, episode: Optional[int] = None) -> list:
         """Fast search & catalog parsing on HDHub4u via Typesense API & Dynamic Mirror (< 200ms)."""
         clean = query.strip()
         api_url = "https://search.pingora.fyi/collections/post/documents/search"
@@ -343,6 +635,29 @@ class FastScrapers:
                 data = resp.json()
                 hits = data.get("hits", [])
 
+                if season is not None:
+                    def score_hdh_hit(h):
+                        doc = h.get("document", {})
+                        t = (doc.get("post_title", "") + " " + doc.get("permalink", "")).lower()
+                        score = 0
+                        s_patterns = [f"season {season}", f"season {season:02d}", f"s{season:02d}", f"s{season}"]
+                        if any(re.search(rf'\b{re.escape(sp)}\b', t) for sp in s_patterns):
+                            score += 100
+                        elif "all episodes" in t or "all seasons" in t or "complete" in t:
+                            score += 50
+                        else:
+                            conflicts = re.findall(r'\b(?:season\s*(\d+)|s(\d{1,2}))\b', t)
+                            for c in conflicts:
+                                c_num = int(c[0] or c[1])
+                                if c_num != season:
+                                    score -= 100
+                                    break
+                        return score
+
+                    hits.sort(key=score_hdh_hit, reverse=True)
+                    target_hits = [h for h in hits if score_hdh_hit(h) >= 0]
+                    hits = target_hits if target_hits else hits
+
                 async def fetch_hdh_post(h):
                     doc = h.get("document", {})
                     post_title = doc.get("post_title", "")
@@ -359,42 +674,175 @@ class FastScrapers:
                             if p_resp.status_code == 200:
                                 await report_mirror_success("hdhub4u")
                                 p_soup = BeautifulSoup(p_resp.text, "lxml")
-                                dls = p_soup.find_all("a", href=re.compile(r'hubcloud|hubdrive|drive|gamerxyt|hubcdn'))
-                                season_tag = ""
-                                sm = re.search(r'\b(Season\s*\d+|S\d{1,2})\b', post_title, re.I)
-                                if sm:
-                                    season_tag = sm.group(1).title()
 
-                                for dl in dls:
-                                    label = dl.get_text(strip=True) or dl.find_parent().get_text(strip=True)
-                                    href = dl["href"]
+                                sm = re.search(r'\b(Season\s*(\d+)|S(\d{1,2}))\b', post_title, re.I)
+                                s_num = int(sm.group(2) or sm.group(3)) if sm else (season if season is not None else 1)
+                                if season is not None and s_num != season:
+                                    return []
 
-                                    # Context lookup
-                                    prev_h = dl.find_previous(["h2", "h3", "h4", "h5", "p", "strong", "span"])
-                                    context_str = prev_h.get_text(" ", strip=True) if prev_h else ""
+                                seen_targets = set()
 
-                                    ep_m = re.search(r'\b(Episode\s*\d+|Ep\s*\d+|E\d{1,2}|Pack)\b', f"{label} {context_str}", re.I)
-                                    ep_tag = f"{season_tag} {ep_m.group(1).title()}" if (season_tag and ep_m) else (ep_m.group(1).title() if ep_m else "")
+                                # Dual-Mode Discrete Episode Extraction
+                                # Mode A: div.kp-header / div.kp-hc episode rows (EPiSODE 1 -> greenmotors/hubcloud)
+                                kp_elements = p_soup.find_all(class_=re.compile(r'kp-header|kp-hc'))
+                                for kp in kp_elements:
+                                    for dl in kp.find_all("a", href=re.compile(r'hubcloud|hubdrive|drive|gamerxyt|hubcdn|greenmotors')):
+                                        href = dl["href"]
+                                        if href in seen_targets:
+                                            continue
+                                        txt = dl.get_text(" ", strip=True)
+                                        p_txt = dl.parent.get_text(" ", strip=True) if dl.parent else ""
+                                        combo = f"{txt} {p_txt}"
+                                        ep_m = re.search(r'\b(?:EPiSODE|Episode|Ep|E)\s*0*(\d{1,3})\b', combo, re.I)
+                                        if ep_m:
+                                            e_val = int(ep_m.group(1))
+                                            if episode is not None and e_val != episode:
+                                                continue
+                                            seen_targets.add(href)
+                                            prev_h = kp.find_previous(["h2", "h3", "h4", "h5", "p", "strong", "span"])
+                                            ctx_str = prev_h.get_text(" ", strip=True) if prev_h else ""
+                                            res_m = re.search(r'(2160p|4K|1080p|720p|480p)', f"{combo} {ctx_str}", re.I)
+                                            detected_res = res_m.group(1).upper() if res_m else ("4K/UHD" if "2160" in post_title else "1080P")
+                                            if detected_res == "4K":
+                                                detected_res = "2160P"
+                                            size_m = re.search(r'\[?(\d+(?:\.\d+)?\s*(?:GB|MB)(?:\s*/\s*E)?)\]?', f"{combo} {ctx_str}", re.I)
+                                            detected_size = size_m.group(1).upper().strip("[] ") if size_m else "Unknown"
+                                            lbl = dl.get_text(strip=True) or f"EPiSODE {e_val}"
 
-                                    res_m = re.search(r'(2160p|4K|1080p|720p|480p)', f"{label} {context_str}", re.I)
-                                    size_m = re.search(r'(\d+(?:\.\d+)?\s*(?:GB|MB))', f"{label} {context_str}", re.I)
-                                    detected_res = res_m.group(1).upper() if res_m else ("4K/UHD" if "2160" in post_title else "1080P")
+                                            post_results.append({
+                                                "platform": "HDHub4u",
+                                                "title": f"{post_title} Season {s_num}".strip(),
+                                                "label": f"S{s_num:02d}E{e_val:02d} [{detected_res}] - {lbl}",
+                                                "episode_tag": f"S{s_num:02d}E{e_val:02d}",
+                                                "resolution": detected_res,
+                                                "codec": "HEVC" if any(k in f"{combo} {ctx_str}".upper() for k in ["HEVC", "10BIT"]) else "x264",
+                                                "size": detected_size,
+                                                "audio": "Dual Audio (Hindi + Eng)" if "Dual" in post_title or "Hindi" in post_title else "Original",
+                                                "target_url": href,
+                                                "is_batch": False,
+                                                "source_id": "hdh_mode_a"
+                                            })
 
-                                    post_results.append({
-                                        "platform": "HDHub4u",
-                                        "title": f"{post_title} {season_tag}".strip(),
-                                        "label": f"{context_str[:40]} - {label}" if context_str and len(label) < 15 else label[:70],
-                                        "episode_tag": ep_tag,
-                                        "resolution": detected_res,
-                                        "codec": "HEVC" if "HEVC" in f"{label} {context_str}" or "10Bit" in f"{label} {context_str}" else "x264",
-                                        "size": size_m.group(1).upper() if size_m else "Unknown",
-                                        "audio": "Dual Audio (Hindi + Eng)" if "Dual" in post_title or "Hindi" in post_title else "Original",
-                                        "target_url": href,
-                                        "source_id": "hdh_res"
-                                    })
+                                # Mode B: Heading sequences <h4>EPiSODE {e}</h4> followed by sibling quality links (Drive, Instant, Watch)
+                                for h in p_soup.find_all(["h2", "h3", "h4", "h5", "p"]):
+                                    h_text = h.get_text(" ", strip=True)
+                                    ep_m = re.search(r'\b(?:EPiSODE|Episode|Ep|E)\s*0*(\d{1,3})\b', h_text, re.I)
+                                    if not ep_m:
+                                        continue
+                                    if re.search(r'\b(?:pack|batch|zip|\d+\s*-\s*\d+)\b', h_text, re.I):
+                                        continue
+                                    e_val = int(ep_m.group(1))
+                                    if episode is not None and e_val != episode:
+                                        continue
+
+                                    target_links = []
+                                    curr = h.next_sibling
+                                    while curr:
+                                        if hasattr(curr, "name") and curr.name:
+                                            if curr.name in ["h1", "h2", "hr"]:
+                                                break
+                                            c_txt = curr.get_text(" ", strip=True)
+                                            # If this is the next episode header, stop
+                                            if re.search(r'\b(?:EPiSODE|Episode|Ep|E)\s*0*(\d{1,3})\b', c_txt, re.I) and not any(r in c_txt.lower() for r in ["720p", "1080p", "480p", "2160p", "drive", "instant", "watch"]):
+                                                break
+                                            for a in curr.find_all("a", href=re.compile(r'hubcloud|hubdrive|drive|gamerxyt|hubcdn|greenmotors')):
+                                                target_links.append((a, c_txt))
+                                            if curr.name == "a" and re.search(r'hubcloud|hubdrive|drive|gamerxyt|hubcdn|greenmotors', curr.get("href", "")):
+                                                target_links.append((curr, c_txt))
+                                        curr = curr.next_sibling
+
+                                    if not target_links:
+                                        continue
+
+                                    prev_h = h.find_previous(["h2", "h3"])
+                                    ctx_str = prev_h.get_text(" ", strip=True) if prev_h else ""
+
+                                    for a, sibling_ctx in target_links:
+                                        href = a["href"]
+                                        if href in seen_targets:
+                                            continue
+                                        seen_targets.add(href)
+                                        lbl = a.get_text(strip=True) or "Watch"
+                                        res_m = re.search(r'(2160p|4K|1080p|720p|480p)', f"{sibling_ctx} {h_text} {ctx_str}", re.I)
+                                        detected_res = res_m.group(1).upper() if res_m else ("4K/UHD" if "2160" in post_title else "1080P")
+                                        if detected_res == "4K":
+                                            detected_res = "2160P"
+                                        size_m = re.search(r'\[?(\d+(?:\.\d+)?\s*(?:GB|MB)(?:\s*/\s*E)?)\]?', f"{sibling_ctx} {h_text} {ctx_str}", re.I)
+                                        detected_size = size_m.group(1).upper().strip("[] ") if size_m else "Unknown"
+
+                                        post_results.append({
+                                            "platform": "HDHub4u",
+                                            "title": f"{post_title} Season {s_num}".strip(),
+                                            "label": f"S{s_num:02d}E{e_val:02d} [{detected_res}] - {lbl}",
+                                            "episode_tag": f"S{s_num:02d}E{e_val:02d}",
+                                            "resolution": detected_res,
+                                            "codec": "HEVC" if any(k in f"{sibling_ctx} {h_text} {ctx_str}".upper() for k in ["HEVC", "10BIT"]) else "x264",
+                                            "size": detected_size,
+                                            "audio": "Dual Audio (Hindi + Eng)" if "Dual" in post_title or "Hindi" in post_title else "Original",
+                                            "target_url": href,
+                                            "is_batch": False,
+                                            "source_id": "hdh_mode_b"
+                                        })
+
+                                # Fallback: Generic link parsing if neither Mode A nor Mode B found discrete episodes
+                                if not post_results:
+                                    dls = p_soup.find_all("a", href=re.compile(r'hubcloud|hubdrive|drive|gamerxyt|hubcdn|greenmotors'))
+                                    season_tag = f"Season {s_num}"
+                                    for dl in dls:
+                                        href = dl["href"]
+                                        if href in seen_targets:
+                                            continue
+                                        seen_targets.add(href)
+                                        label = dl.get_text(strip=True) or dl.find_parent().get_text(strip=True)
+                                        prev_h = dl.find_previous(["h2", "h3", "h4", "h5", "p", "strong", "span"])
+                                        context_str = prev_h.get_text(" ", strip=True) if prev_h else ""
+
+                                        is_range = bool(re.search(r'(?:episodes?|ep|e)\s*\d+\s*-\s*\d+', f"{label} {context_str}", re.I))
+                                        is_batch_kw = any(k in f"{label} {context_str}".lower() for k in ["batch", "zip", "pack", "full season", "all episodes", "complete"]) or bool(re.search(r'\b(batch|zip|pack|full\s*season|all\s*episodes|complete\s*(?:series|season|batch|pack)|s\d+\s*-\s*s\d+|season\s*\d+\s*zip)\b', f"{label} {context_str}", re.I))
+
+                                        ep_m = re.search(r'\b(Episode\s*0*(\d{1,3})|Ep\s*0*(\d{1,3})|E0*(\d{1,3}))\b', label, re.I)
+                                        if not ep_m:
+                                            ep_m = re.search(r'\b(Episode\s*0*(\d{1,3})|Ep\s*0*(\d{1,3})|E0*(\d{1,3}))\b', context_str, re.I)
+
+                                        if ep_m and not (is_range or is_batch_kw):
+                                            e_val = int(ep_m.group(2) or ep_m.group(3) or ep_m.group(4))
+                                            if episode is not None and e_val != episode:
+                                                continue
+                                            ep_tag = f"S{s_num:02d}E{e_val:02d}"
+                                            is_batch = False
+                                        elif is_batch_kw or is_range:
+                                            if episode is not None:
+                                                continue
+                                            ep_tag = f"S{s_num:02d} Batch"
+                                            is_batch = True
+                                        else:
+                                            if episode is not None:
+                                                continue
+                                            is_batch = False
+                                            ep_tag = season_tag or ""
+
+                                        res_m = re.search(r'(2160p|4K|1080p|720p|480p)', f"{label} {context_str}", re.I)
+                                        size_m = re.search(r'\[?(\d+(?:\.\d+)?\s*(?:GB|MB)(?:\s*/\s*E)?)\]?', f"{label} {context_str}", re.I)
+                                        detected_res = res_m.group(1).upper() if res_m else ("4K/UHD" if "2160" in post_title else "1080P")
+                                        if detected_res == "4K":
+                                            detected_res = "2160P"
+
+                                        post_results.append({
+                                            "platform": "HDHub4u",
+                                            "title": f"{post_title} {season_tag}".strip(),
+                                            "label": f"{context_str[:40]} - {label}" if context_str and len(label) < 15 else label[:70],
+                                            "episode_tag": ep_tag,
+                                            "resolution": detected_res,
+                                            "codec": "HEVC" if "HEVC" in f"{label} {context_str}" or "10Bit" in f"{label} {context_str}" else "x264",
+                                            "size": size_m.group(1).upper().strip("[] ") if size_m else "Unknown",
+                                            "audio": "Dual Audio (Hindi + Eng)" if "Dual" in post_title or "Hindi" in post_title else "Original",
+                                            "target_url": href,
+                                            "is_batch": is_batch,
+                                            "source_id": "hdh_res"
+                                        })
 
                                 # Layer 2 JEV Fallback: If heuristic parsing yielded 0 links
-                                if not post_results and p_resp.text:
+                                if not post_results and p_resp.text and episode is None:
                                     post_results = await JevStreamResolver.extract_media_streams(
                                         p_resp.text,
                                         query=post_title or query,
@@ -413,7 +861,7 @@ class FastScrapers:
                         results.extend(hl)
 
                 # Outer Layer 2 Fallback: If 0 results discovered across all hits
-                if not results and resp.text:
+                if not results and resp.text and episode is None:
                     results = await JevStreamResolver.extract_media_streams(
                         resp.text,
                         query=query,
@@ -426,145 +874,429 @@ class FastScrapers:
 
         return results
 
-    async def search_olamovies(self, client: httpx.AsyncClient, query: str) -> list:
-        """Fast search & catalog parsing on OlaMovies Next.js SSR (< 450ms)."""
+    async def search_olamovies(self, client: httpx.AsyncClient, query: str, season: Optional[int] = None, episode: Optional[int] = None) -> list:
+        """Fast multi-strategy search & catalog parsing on OlaMovies (JSON API + SSR + JEV, < 450ms)."""
         clean = query.strip()
         ola_mirror = await get_active_mirror("olamovies")
         encoded_q = urllib.parse.quote_plus(clean)
-        url = f"{ola_mirror}/search?q={encoded_q}"
         results = []
 
+        # Query words with stopword exclusion for intelligent ranking
+        STOPWORDS = {"the", "and", "all", "movie", "movies", "collection", "full", "series", "season", "part"}
+        words = [w.lower() for w in re.split(r'[\s+._:-]+', clean) if len(w) >= 3 and w.lower() not in STOPWORDS]
+        if not words:
+            words = [w.lower() for w in re.split(r'[\s+._:-]+', clean) if len(w) >= 2]
+
+        all_candidates = []
+
+        # -------------------------------------------------------------
+        # Strategy 1 (Primary): Direct JSON API Search (< 120ms)
+        # -------------------------------------------------------------
         try:
-            resp = await client.get(url, headers=DEFAULT_HEADERS, follow_redirects=True, timeout=4.0)
-            if resp.status_code == 200:
+            api_url = f"{ola_mirror}/api/search?q={encoded_q}"
+            api_resp = await client.get(api_url, headers=DEFAULT_HEADERS, timeout=3.5)
+            if api_resp.status_code == 200:
                 await report_mirror_success("olamovies")
-                soup = BeautifulSoup(resp.text, "lxml")
+                data = api_resp.json()
+                items = data.get("items", []) if isinstance(data, dict) else []
+                for it in items:
+                    href = it.get("url") or f"/tv-series/{it.get('slug')}" if it.get("category") == "English TV Series" else f"/movies/{it.get('slug')}"
+                    slug = (it.get("slug") or href.split("/")[-1]).lower()
+                    title = it.get("title") or slug.replace("-", " ").title()
+                    is_tv_series = "/tv-series/" in href or "tv series" in str(it.get("category", "")).lower() or "series" in slug
 
-                # Query words with stopword exclusion for intelligent ranking
-                STOPWORDS = {"the", "and", "all", "movie", "movies", "collection", "full", "series", "season", "part"}
-                words = [w.lower() for w in re.split(r'[\s+._:-]+', clean) if len(w) >= 3 and w.lower() not in STOPWORDS]
-                if not words:
-                    words = [w.lower() for w in re.split(r'[\s+._:-]+', clean) if len(w) >= 2]
-
-                all_candidates = []
-                for a in soup.find_all("a", href=re.compile(r"^/(?:movies|series)/[a-zA-Z0-9_-]+$")):
-                    href = a["href"]
-                    slug = href.split("/")[-1].lower()
-                    text = a.get_text(" ", strip=True)
-
-                    if any(k in href for k in ["comment-", "category", "tag"]):
-                        continue
-
-                    # Score post
                     score = 0
                     if any(k in slug for k in ["universe-collection", "all-movies-collection", "complete-collection", "imdb-top-250"]):
-                        score -= 10
+                        score -= 15
 
-                    matched = sum(1 for w in words if w in slug or w in text.lower())
-                    score += matched * 5
+                    matched = sum(1 for w in words if w in slug or w in title.lower())
+                    score += matched * 8
 
-                    if words and slug.startswith(words[0]):
-                        score += 3
+                    if words and (slug.startswith(words[0]) or title.lower().startswith(words[0])):
+                        score += 5
+
+                    if season is not None:
+                        if is_tv_series:
+                            score += 25  # Unified TV series page hosts all seasons
+                        s_patterns = [f"season-{season}", f"season{season}", f"s{season:02d}", f"s{season}"]
+                        if any(sp in slug or sp in title.lower() for sp in s_patterns):
+                            score += 30
+                        else:
+                            conflicts = re.findall(r'\b(?:season\s*(\d+)|s(\d{1,2}))\b', f"{slug} {title}".lower())
+                            for c in conflicts:
+                                c_num = int(c[0] or c[1])
+                                if c_num != season:
+                                    score -= 30
+                                    break
 
                     if matched > 0 and href not in [p["href"] for p in all_candidates]:
-                        title = text.strip() or slug.replace("-", " ").title()
                         all_candidates.append({"score": score, "href": href, "title": title, "slug": slug})
-
-                all_candidates.sort(key=lambda x: x["score"], reverse=True)
-                matching_posts = all_candidates[:3]
-
-                async def fetch_ola_post(p):
-                    post_url = f"{ola_mirror}{p['href']}"
-                    post_results = []
-                    try:
-                        p_resp = await client.get(post_url, headers=DEFAULT_HEADERS, follow_redirects=True, timeout=4.0)
-                        if p_resp.status_code == 200:
-                            await report_mirror_success("olamovies")
-                            clean_html = p_resp.text.replace('\\"', '"').replace('\\\\', '\\')
-
-                            # 1. Primary: Extract from Next.js self.__next_f JSON chunks
-                            file_matches = list(re.finditer(
-                                r'\{"id":"itm_[^"]+","btnId":"[^"]+","url":"(https?://links\.[^"]+)","label":"([^"]+)",(?:.*?"filename":"([^"]+)")?',
-                                clean_html
-                            ))
-
-                            for fm in file_matches:
-                                dl_url = fm.group(1)
-                                lbl = fm.group(2)
-                                fname = fm.group(3) or lbl
-                                meta_str = f"{lbl} {fname}"
-
-                                res_m = re.search(r'(2160p|4K|1080p|720p|480p)', meta_str, re.I)
-                                size_m = re.search(r'(\d+(?:\.\d+)?\s*(?:GB|MB))', meta_str, re.I)
-
-                                post_results.append({
-                                    "platform": "OlaMovies",
-                                    "title": p["title"][:80],
-                                    "label": f"{lbl} - {fname[:60]}",
-                                    "resolution": res_m.group(1).upper() if res_m else "1080P",
-                                    "codec": "HEVC 10-bit" if any(k in meta_str.upper() for k in ["HEVC", "X265", "10BIT"]) else "x264",
-                                    "size": size_m.group(1).upper() if size_m else "Unknown",
-                                    "audio": "Multi Audio" if any(k in meta_str.lower() for k in ["multi", "hindi", "dual", "tamil", "telugu"]) else "Original",
-                                    "target_url": dl_url,
-                                    "source_id": "ola_nextjs"
-                                })
-
-                            # 2. Fallback: Classic DOM anchors
-                            if not post_results:
-                                p_soup = BeautifulSoup(p_resp.text, "lxml")
-                                for a_tag in p_soup.find_all("a", href=re.compile(r'https?://links\.(?:ol-am|olamovies)\.[^/]+/[^\s"\'<>]+')):
-                                    dl_url = a_tag["href"]
-                                    lbl = a_tag.get_text(strip=True) or a_tag.find_parent().get_text(strip=True)
-                                    res_m = re.search(r'(2160p|4K|1080p|720p|480p)', lbl, re.I)
-                                    size_m = re.search(r'(\d+(?:\.\d+)?\s*(?:GB|MB))', lbl, re.I)
-                                    post_results.append({
-                                        "platform": "OlaMovies",
-                                        "title": p["title"][:80],
-                                        "label": lbl[:60],
-                                        "resolution": res_m.group(1).upper() if res_m else "1080P",
-                                        "codec": "HEVC 10-bit" if "hevc" in lbl.lower() or "x265" in lbl.lower() else "x264",
-                                        "size": size_m.group(1).upper() if size_m else "Unknown",
-                                        "audio": "Multi Audio" if "multi" in lbl.lower() or "hindi" in lbl.lower() else "Original",
-                                        "target_url": dl_url,
-                                        "source_id": "ola_dom"
-                                    })
-                        else:
-                            await report_mirror_failure("olamovies", post_url)
-                    except Exception:
-                        await report_mirror_failure("olamovies", post_url)
-                    return post_results
-
-                ola_tasks = [fetch_ola_post(p) for p in matching_posts[:2]]
-                ola_lists = await asyncio.gather(*ola_tasks, return_exceptions=True)
-                for ol in ola_lists:
-                    if isinstance(ol, list):
-                        results.extend(ol)
-            else:
-                await report_mirror_failure("olamovies", url)
         except Exception:
-            await report_mirror_failure("olamovies", url)
+            pass
+
+        # -------------------------------------------------------------
+        # Strategy 2 (Fallback): HTML SSR Search
+        # -------------------------------------------------------------
+        if not all_candidates:
+            try:
+                url = f"{ola_mirror}/search?q={encoded_q}"
+                resp = await client.get(url, headers=DEFAULT_HEADERS, follow_redirects=True, timeout=4.0)
+                if resp.status_code == 200:
+                    await report_mirror_success("olamovies")
+                    soup = BeautifulSoup(resp.text, "lxml")
+
+                    for a in soup.find_all("a", href=re.compile(r"/(?:movies|series|tv-series)/[a-zA-Z0-9_-]+$")):
+                        href = a["href"]
+                        slug = href.split("/")[-1].lower()
+                        text = a.get_text(" ", strip=True)
+
+                        if any(k in href for k in ["comment-", "category", "tag"]):
+                            continue
+
+                        score = 0
+                        if any(k in slug for k in ["universe-collection", "all-movies-collection", "complete-collection", "imdb-top-250"]):
+                            score -= 10
+
+                        matched = sum(1 for w in words if w in slug or w in text.lower())
+                        score += matched * 5
+
+                        if words and slug.startswith(words[0]):
+                            score += 3
+
+                        if season is not None:
+                            s_patterns = [f"season-{season}", f"season{season}", f"s{season:02d}", f"s{season}"]
+                            if any(sp in slug or sp in text.lower() for sp in s_patterns):
+                                score += 25
+                            else:
+                                conflicts = re.findall(r'\b(?:season\s*(\d+)|s(\d{1,2}))\b', f"{slug} {text}".lower())
+                                for c in conflicts:
+                                    c_num = int(c[0] or c[1])
+                                    if c_num != season:
+                                        score -= 25
+                                        break
+
+                        if matched > 0 and href not in [p["href"] for p in all_candidates]:
+                            title = text.strip() or slug.replace("-", " ").title()
+                            all_candidates.append({"score": score, "href": href, "title": title, "slug": slug})
+            except Exception:
+                pass
+
+        if not all_candidates:
+            return results
+
+        all_candidates.sort(key=lambda x: x["score"], reverse=True)
+        matching_posts = [p for p in all_candidates if p["score"] >= 0][:3] or all_candidates[:2]
+
+        async def fetch_ola_post(p):
+            post_url = f"{ola_mirror}{p['href']}" if p['href'].startswith("/") else p['href']
+            post_results = []
+            try:
+                p_resp = await client.get(post_url, headers=DEFAULT_HEADERS, follow_redirects=True, timeout=4.0)
+                if p_resp.status_code == 200:
+                    await report_mirror_success("olamovies")
+                    clean_html = p_resp.text.replace('\\"', '"').replace('\\\\', '\\')
+
+                    # 1. Primary Architecture: Next.js self.__next_f Structured JSON (Sections / Sources / Blocks / Episodes / Packs)
+                    try:
+                        chunks = re.findall(r"self\.__next_f\.push\(\[1,\s*\"(.*?)\"\]\)", p_resp.text, re.DOTALL)
+                        if chunks:
+                            full_stream = "".join(c.encode("utf-8").decode("unicode_escape", errors="ignore") for c in chunks)
+                            idx = full_stream.find("\"sections\":[")
+                            if idx != -1:
+                                start = idx + len("\"sections\":")
+                                decoder = json.JSONDecoder()
+                                sections, _ = decoder.raw_decode(full_stream[start:])
+
+                                for s in sections:
+                                    s_id = s.get("id", "")
+                                    s_label = s.get("label", "")
+                                    s_season = s.get("season")
+
+                                    sec_num = None
+                                    if s_season is not None:
+                                        try:
+                                            sec_num = int(s_season)
+                                        except Exception:
+                                            pass
+                                    if sec_num is None and s_id:
+                                        m = re.search(r"season-?(\d+)", s_id, re.I)
+                                        if m:
+                                            sec_num = int(m.group(1))
+                                    if sec_num is None and s_label:
+                                        m = re.search(r"season\s*(\d+)", s_label, re.I)
+                                        if m:
+                                            sec_num = int(m.group(1))
+
+                                    # If season is requested and this section represents a different season, skip
+                                    if season is not None and sec_num is not None and sec_num != season:
+                                        continue
+
+                                    curr_s = sec_num if sec_num is not None else (season if season is not None else 1)
+
+                                    blocks_to_process = []
+                                    for src in s.get("sources", []):
+                                        for blk in src.get("blocks", []):
+                                            blocks_to_process.append((src.get("label", ""), blk))
+                                    for blk in s.get("blocks", []):
+                                        blocks_to_process.append((s_label, blk))
+
+                                    for src_lbl, blk in blocks_to_process:
+                                        res = blk.get("resolution") or "1080P"
+                                        group = blk.get("group") or ""
+                                        heading = blk.get("heading") or ""
+                                        specs = blk.get("specs", [])
+                                        specs_str = " ".join(specs) if isinstance(specs, list) else str(specs)
+
+                                        # A) Full Season Batch Packs (ZIP archives)
+                                        packs = blk.get("packs", [])
+                                        if packs and episode is None:
+                                            for pk in packs:
+                                                pk_url = pk.get("url")
+                                                if not pk_url:
+                                                    continue
+                                                pk_lbl = pk.get("label") or "Season Zip"
+                                                pk_fname = pk.get("filename") or heading or pk_lbl
+                                                pk_meta = f"{pk_lbl} {pk_fname} {specs_str}"
+                                                size_m = re.search(r'(\d+(?:\.\d+)?\s*(?:GB|MB))', pk_meta, re.I)
+                                                sz = size_m.group(1).upper() if size_m else "ZIP"
+                                                post_results.append({
+                                                    "platform": "OlaMovies",
+                                                    "title": p["title"][:80],
+                                                    "label": f"OlaMovies | [{res.upper()}] S{curr_s:02d} Batch - {group} ({sz})".strip(),
+                                                    "episode_tag": f"S{curr_s:02d} Batch",
+                                                    "resolution": res.upper(),
+                                                    "codec": "HEVC 10-bit" if any(k in pk_meta.upper() for k in ["HEVC", "X265", "10BIT"]) else "x264",
+                                                    "size": sz,
+                                                    "audio": "Multi Audio" if any(k in pk_meta.lower() for k in ["multi", "hindi", "dual", "atmos", "ddp"]) else "Original",
+                                                    "target_url": pk_url,
+                                                    "is_batch": True,
+                                                    "source_id": "ola_nextjs_pack"
+                                                })
+
+                                        # B) Discrete TV Episodes
+                                        episodes = blk.get("episodes", [])
+                                        for ep in episodes:
+                                            ep_num = ep.get("episode")
+                                            ep_url = ep.get("url")
+                                            if not ep_url:
+                                                continue
+                                            if episode is not None and ep_num is not None and ep_num != episode:
+                                                continue
+                                            ep_fname = ep.get("filename") or ""
+                                            ep_filesize = ep.get("filesize") or ""
+                                            ep_lbl = ep.get("label") or f"Episode {ep_num}"
+                                            ep_meta = f"{ep_lbl} {ep_fname} {specs_str} {heading}"
+                                            actual_ep = ep_num if ep_num is not None else episode
+                                            ep_tag = f"S{curr_s:02d}E{actual_ep:02d}" if actual_ep is not None else f"S{curr_s:02d}E01"
+                                            res_m = re.search(r'(2160p|4K|1080p|720p|480p)', f"{res} {ep_meta}", re.I)
+                                            clean_res = res_m.group(1).upper() if res_m else res.upper()
+                                            size_m = re.search(r'(\d+(?:\.\d+)?\s*(?:GB|MB))', ep_meta, re.I)
+                                            size_val = ep_filesize or (size_m.group(1).upper() if size_m else "Unknown")
+                                            post_results.append({
+                                                "platform": "OlaMovies",
+                                                "title": p["title"][:80],
+                                                "label": f"OlaMovies | [{clean_res}] {ep_tag} {group} ({size_val})".strip(),
+                                                "episode_tag": ep_tag,
+                                                "resolution": clean_res,
+                                                "codec": "HEVC 10-bit" if any(k in ep_meta.upper() for k in ["HEVC", "X265", "10BIT"]) else "x264",
+                                                "size": size_val.upper(),
+                                                "audio": "Multi Audio" if any(k in ep_meta.lower() for k in ["multi", "hindi", "dual", "atmos", "ddp", "5.1"]) else "Original",
+                                                "target_url": ep_url,
+                                                "is_batch": False,
+                                                "source_id": "ola_nextjs_ep"
+                                            })
+
+                                        # C) Movies (Files Array)
+                                        files = blk.get("files", [])
+                                        for f in files:
+                                            f_url = f.get("url")
+                                            if not f_url:
+                                                continue
+                                            f_fname = f.get("filename") or ""
+                                            f_lbl = f.get("label") or ""
+                                            f_meta = f"{f_lbl} {f_fname} {specs_str} {res}"
+                                            res_m = re.search(r'(2160p|4K|1080p|720p|480p)', f_meta, re.I)
+                                            clean_res = res_m.group(1).upper() if res_m else res.upper()
+                                            size_m = re.search(r'(\d+(?:\.\d+)?\s*(?:GB|MB))', f_meta, re.I)
+                                            sz = size_m.group(1).upper() if size_m else "Unknown"
+                                            post_results.append({
+                                                "platform": "OlaMovies",
+                                                "title": p["title"][:80],
+                                                "label": f"OlaMovies | [{clean_res}] {f_lbl or clean_res} - {group} ({sz})".strip(),
+                                                "episode_tag": "",
+                                                "resolution": clean_res,
+                                                "codec": "HEVC 10-bit" if any(k in f_meta.upper() for k in ["HEVC", "X265", "10BIT"]) else "x264",
+                                                "size": sz,
+                                                "audio": "Multi Audio" if any(k in f_meta.lower() for k in ["multi", "hindi", "dual", "atmos", "ddp", "5.1"]) else "Original",
+                                                "target_url": f_url,
+                                                "is_batch": False,
+                                                "source_id": "ola_nextjs_file"
+                                            })
+                    except Exception:
+                        pass
+
+                    # 2. Secondary Fallback: Regex Parsing of Next.js chunks if structured sections was empty
+                    if not post_results:
+                        file_matches = list(re.finditer(
+                            r'\{"id":"itm_[^"]+","btnId":"[^"]+","url":"([^"]+)","label":"([^"]+)",(?:.*?"filename":"([^"]+)")?',
+                            clean_html
+                        ))
+
+                        for fm in file_matches:
+                            dl_url = fm.group(1)
+                            if not any(k in dl_url for k in ["links.", "ol-am", "olamovies", "drive."]):
+                                continue
+                            lbl = fm.group(2)
+                            fname = fm.group(3) or lbl
+                            meta_str = f"{lbl} {fname}"
+
+                            # Extract season and episode numbers from lbl / fname
+                            s_val = None
+                            e_val = None
+                            se_m = re.search(r'\bS(\d{1,2})\s*[-._ ]?E(\d{1,3})\b', meta_str, re.I)
+                            if se_m:
+                                s_val = int(se_m.group(1))
+                                e_val = int(se_m.group(2))
+                            else:
+                                s_m = re.search(r'\b(?:Season|S)\s*0*(\d{1,2})\b', meta_str, re.I)
+                                if s_m:
+                                    s_val = int(s_m.group(1))
+                                e_m = re.search(r'\b(?:Episode|Ep|E)\s*0*(\d{1,3})\b', meta_str, re.I)
+                                if e_m:
+                                    e_val = int(e_m.group(1))
+
+                            if s_val is None:
+                                s_val = season if season is not None else 1
+
+                            is_range = bool(re.search(r'(?:episodes?|ep|e)\s*\d+\s*-\s*\d+', meta_str, re.I))
+                            is_batch_kw = any(k in meta_str.lower() for k in ["batch", "zip", "pack", "full season", "all episodes", "complete"]) or bool(re.search(r'\b(?:batch|zip|pack|full\s*season|all\s*episodes|complete)\b', meta_str, re.I))
+
+                            if e_val is not None and not (is_range or is_batch_kw):
+                                if season is not None and s_val != season:
+                                    continue
+                                if episode is not None and e_val != episode:
+                                    continue
+                                ep_tag = f"S{s_val:02d}E{e_val:02d}"
+                                is_batch = False
+                            elif is_batch_kw or is_range:
+                                if episode is not None:
+                                    continue
+                                ep_tag = f"S{s_val:02d} Batch"
+                                is_batch = True
+                            else:
+                                is_batch = bool("season" in meta_str.lower() and e_val is None)
+                                if episode is not None and is_batch:
+                                    continue
+                                ep_tag = f"S{s_val:02d} Batch" if is_batch else ""
+
+                            res_m = re.search(r'(2160p|4K|1080p|720p|480p)', meta_str, re.I)
+                            size_m = re.search(r'(\d+(?:\.\d+)?\s*(?:GB|MB))', meta_str, re.I)
+
+                            post_results.append({
+                                "platform": "OlaMovies",
+                                "title": p["title"][:80],
+                                "label": f"{lbl} - {fname[:60]}",
+                                "episode_tag": ep_tag,
+                                "resolution": res_m.group(1).upper() if res_m else "1080P",
+                                "codec": "HEVC 10-bit" if any(k in meta_str.upper() for k in ["HEVC", "X265", "10BIT"]) else "x264",
+                                "size": size_m.group(1).upper() if size_m else "Unknown",
+                                "audio": "Multi Audio" if any(k in meta_str.lower() for k in ["multi", "hindi", "dual", "tamil", "telugu"]) else "Original",
+                                "target_url": dl_url,
+                                "is_batch": is_batch,
+                                "source_id": "ola_nextjs_legacy"
+                            })
+
+                    # 2. Fallback: Classic DOM anchors
+                    if not post_results:
+                        p_soup = BeautifulSoup(p_resp.text, "lxml")
+                        for a_tag in p_soup.find_all("a", href=re.compile(r'https?://(?:links\.|drive\.|dl\.)(?:ol-am|olamovies)\.[^/]+/[^\s"\'<>]+')):
+                            dl_url = a_tag["href"]
+                            lbl = a_tag.get_text(strip=True) or a_tag.find_parent().get_text(strip=True)
+                            meta_str = lbl
+
+                            s_val = None
+                            e_val = None
+                            se_m = re.search(r'\bS(\d{1,2})\s*[-._ ]?E(\d{1,3})\b', meta_str, re.I)
+                            if se_m:
+                                s_val = int(se_m.group(1))
+                                e_val = int(se_m.group(2))
+                            else:
+                                s_m = re.search(r'\b(?:Season|S)\s*0*(\d{1,2})\b', meta_str, re.I)
+                                if s_m:
+                                    s_val = int(s_m.group(1))
+                                e_m = re.search(r'\b(?:Episode|Ep|E)\s*0*(\d{1,3})\b', meta_str, re.I)
+                                if e_m:
+                                    e_val = int(e_m.group(1))
+
+                            if s_val is None:
+                                s_val = season if season is not None else 1
+
+                            is_range = bool(re.search(r'(?:episodes?|ep|e)\s*\d+\s*-\s*\d+', meta_str, re.I))
+                            is_batch_kw = any(k in meta_str.lower() for k in ["batch", "zip", "pack", "full season", "all episodes", "complete"]) or bool(re.search(r'\b(?:batch|zip|pack|full\s*season|all\s*episodes|complete)\b', meta_str, re.I))
+
+                            if e_val is not None and not (is_range or is_batch_kw):
+                                if season is not None and s_val != season:
+                                    continue
+                                if episode is not None and e_val != episode:
+                                    continue
+                                ep_tag = f"S{s_val:02d}E{e_val:02d}"
+                                is_batch = False
+                            elif is_batch_kw or is_range:
+                                if episode is not None:
+                                    continue
+                                ep_tag = f"S{s_val:02d} Batch"
+                                is_batch = True
+                            else:
+                                is_batch = bool("season" in meta_str.lower() and e_val is None)
+                                if episode is not None and is_batch:
+                                    continue
+                                ep_tag = f"S{s_val:02d} Batch" if is_batch else ""
+
+                            res_m = re.search(r'(2160p|4K|1080p|720p|480p)', lbl, re.I)
+                            size_m = re.search(r'(\d+(?:\.\d+)?\s*(?:GB|MB))', lbl, re.I)
+
+                            post_results.append({
+                                "platform": "OlaMovies",
+                                "title": p["title"][:80],
+                                "label": lbl[:60],
+                                "episode_tag": ep_tag,
+                                "resolution": res_m.group(1).upper() if res_m else "1080P",
+                                "codec": "HEVC 10-bit" if "hevc" in lbl.lower() or "x265" in lbl.lower() else "x264",
+                                "size": size_m.group(1).upper() if size_m else "Unknown",
+                                "audio": "Multi Audio" if "multi" in lbl.lower() or "hindi" in lbl.lower() else "Original",
+                                "target_url": dl_url,
+                                "is_batch": is_batch,
+                                "source_id": "ola_dom"
+                            })
+                else:
+                    await report_mirror_failure("olamovies", post_url)
+            except Exception:
+                await report_mirror_failure("olamovies", post_url)
+            return post_results
+
+        ola_tasks = [fetch_ola_post(p) for p in matching_posts[:2]]
+        ola_lists = await asyncio.gather(*ola_tasks, return_exceptions=True)
+        for ol in ola_lists:
+            if isinstance(ol, list):
+                results.extend(ol)
 
         return results
 
-    async def search_all_concurrent(self, query: str, priority_platform: str = "UHDMovies") -> list:
+    async def search_all_concurrent(self, query: str, priority_platform: str = "UHDMovies", season: Optional[int] = None, episode: Optional[int] = None) -> list:
         """Search across platforms concurrently in parallel (< 800ms)."""
         async with httpx.AsyncClient(http2=True, limits=self.limits, follow_redirects=True) as client:
             t_uhd = self.search_uhdmovies(client, query)
-            t_vega = self.search_vegamovies(client, query)
-            t_hdh = self.search_hdhub4u(client, query)
-            t_ola = self.search_olamovies(client, query)
+            t_vega = self.search_vegamovies(client, query, season=season, episode=episode)
+            t_hdh = self.search_hdhub4u(client, query, season=season, episode=episode)
+            t_ola = self.search_olamovies(client, query, season=season, episode=episode)
+            t_4khd = self.search_4khdhub(client, query, season=season, episode=episode)
 
-            res_uhd, res_vega, res_hdh, res_ola = await asyncio.gather(t_uhd, t_vega, t_hdh, t_ola, return_exceptions=True)
+            res_uhd, res_vega, res_hdh, res_ola, res_4khd = await asyncio.gather(t_uhd, t_vega, t_hdh, t_ola, t_4khd, return_exceptions=True)
 
             all_results = []
-            if isinstance(res_uhd, list):
-                all_results.extend(res_uhd)
-            if isinstance(res_vega, list):
-                all_results.extend(res_vega)
-            if isinstance(res_hdh, list):
-                all_results.extend(res_hdh)
-            if isinstance(res_ola, list):
-                all_results.extend(res_ola)
+            for r in [res_uhd, res_vega, res_hdh, res_ola, res_4khd]:
+                if isinstance(r, list):
+                    all_results.extend(r)
 
             return all_results
 

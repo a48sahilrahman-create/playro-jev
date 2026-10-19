@@ -588,6 +588,8 @@ async def get_streams(
 
 @app.get("/playback/resolve")
 @app.get("/{user_config}/playback/resolve")
+@app.head("/playback/resolve")
+@app.head("/{user_config}/playback/resolve")
 async def resolve_and_stream(url: str, title: str = "Media", user_config: str = "default"):
     """
     On-Demand Live Stream Resolver:

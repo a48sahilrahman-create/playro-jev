@@ -18,6 +18,7 @@ import json
 import base64
 import subprocess
 import difflib
+from typing import Optional
 import httpx
 from bs4 import BeautifulSoup
 from pathlib import Path
@@ -62,7 +63,8 @@ def clean_media_title(raw_title: str) -> str:
         r'\b(Download|Full Movie|Watch Online|Direct Link|ESubs|Multi Audio|Dual Audio|ORG 5\.1|'
         r'WEB-DL|WEBRip|BluRay|HDRip|DVDRip|\d{3,4}p|2160p|4K|1080p|720p|480p|Restored|'
         r'Malayalam|Hindi|Tamil|Telugu|English|Kannada|the Movie|Hindi Dubbed|Line Audio|'
-        r'DTS-HD|HQ|Clean Audio|HQ-Line Audio|Remastered|Unrated|Extended|IMAX)\b'
+        r'DTS-HD|HQ|Clean Audio|HQ-Line Audio|Remastered|Unrated|Extended|IMAX|'
+        r'AMZN|DSNP|NF|ZEE5|HOTSTAR|SONYLIV|JIO|ATVP|CR|HULU|MAX)\b'
     )
     cleaned = re.sub(noise, '', raw_title, flags=re.I)
     cleaned = re.sub(r'[\{\}\[\]\(\)\|–—:]', ' ', cleaned)
@@ -158,27 +160,55 @@ def is_strict_match(query: str, candidate_title: str) -> bool:
     if q_str == c_str:
         return True
 
-    stop_words = {'movie', 'series', 'download', 'watch', 'online', 'the', 'a', 'an', 'and', 'of', 'in', 'part', 'chapter', 'full', 'hd', 'bluray'}
+    def _is_token_subsequence(sub: list, full: list) -> bool:
+        """Checks if sub appears as a contiguous subsequence in full."""
+        if not sub or not full or len(sub) > len(full):
+            return False
+        sub_len = len(sub)
+        return any(full[i : i + sub_len] == sub for i in range(len(full) - sub_len + 1))
+
+    # Token sequence match on full tokens (e.g. "The Boys" in "The Boys Season 1")
+    # Disallows matching unrelated titles where query is not a sequence (e.g. "The Boys" vs "Walter Boys")
+    if len(q_no_y_tokens) >= 2 and _is_token_subsequence(q_no_y_tokens, c_no_y_tokens):
+        return True
+
+    stop_words = {'movie', 'series', 'download', 'watch', 'online', 'the', 'a', 'an', 'and', 'of', 'in', 'part', 'chapter', 'full', 'hd', 'bluray', 'amzn', 'dsnp', 'nf'}
     q_keywords = [w for w in q_no_y_tokens if len(w) > 1 and w not in stop_words]
     c_keywords = [w for w in c_no_y_tokens if len(w) > 1 and w not in stop_words]
 
-    # Special handling for single-word / short query titles (e.g. "Michael", "Her", "Drive", "Up")
-    if len(q_keywords) == 1:
-        # Candidate must have the query keyword
-        if q_keywords[0] in c_keywords:
-            return True
+    if not q_keywords:
+        q_keywords = [w for w in q_no_y_tokens if len(w) > 1]
+    if not c_keywords:
+        c_keywords = [w for w in c_no_y_tokens if len(w) > 1]
 
-    if len(q_keywords) >= 2:
-        matched = [w for w in q_keywords if w in c_keywords or any(w in cw or cw in w for cw in c_keywords if len(cw) > 3 and len(w) > 3)]
-        if len(matched) >= len(q_keywords) * 0.75:
-            return True
+    if not q_keywords or not c_keywords:
+        return False
 
-    # Substring check with whole word boundaries
-    if f" {q_str} " in f" {c_str} ":
+    # Contiguous sequence match on keywords
+    if len(q_keywords) >= 2 and _is_token_subsequence(q_keywords, c_keywords):
         return True
 
+    # Strict token containment & overlap (disallowing single-token permissive fallback)
+    q_set = set(q_keywords)
+    c_set = set(c_keywords)
+    intersection = q_set & c_set
+    union = q_set | c_set
+
+    q_overlap = len(intersection) / len(q_set) if q_set else 0.0
+    c_overlap = len(intersection) / len(c_set) if c_set else 0.0
+    jaccard = len(intersection) / len(union) if union else 0.0
+
+    # Require at least 80% overlap or full sequence
+    if jaccard >= 0.8 or (q_overlap >= 0.8 and c_overlap >= 0.8):
+        return True
+
+    if len(q_keywords) >= 2 and q_overlap >= 0.8 and c_overlap >= 0.7:
+        matched_indices = [c_keywords.index(w) for w in q_keywords if w in c_keywords]
+        if matched_indices == sorted(matched_indices):
+            return True
+
     ratio = difflib.SequenceMatcher(None, q_str, c_str).ratio()
-    return ratio >= 0.65
+    return ratio >= 0.80
 
 def decode_release_metadata(context_text: str, button_text: str = "", post_title: str = "") -> dict:
     """Universal regex decoder for resolution, codec, size, and audio.
@@ -244,6 +274,68 @@ def decode_release_metadata(context_text: str, button_text: str = "", post_title
         "size": size,
         "audio": audio
     }
+
+try:
+    from fast_scrapers import FastScrapers
+    if not hasattr(FastScrapers, "search_4khdhub"):
+        async def _default_search_4khdhub(self, client, query, season=None, episode=None, **kwargs):
+            if hasattr(self, "search_hdhub4u"):
+                try:
+                    return await self.search_hdhub4u(client, query, season=season, episode=episode, **kwargs)
+                except TypeError:
+                    return await self.search_hdhub4u(client, query)
+            return []
+        FastScrapers.search_4khdhub = _default_search_4khdhub
+except ImportError:
+    pass
+
+class _FastScraperFleetAdapter:
+    """Fleet adapter wrapping FastScrapers to support season/episode parameters,
+    platform tagging ('UHDMovies', '4KHDHub', 'HDHub4u', 'VegaMovies', 'OlaMovies'),
+    and graceful fallback if underlying scrapers or test mocks lack kwargs."""
+    def __init__(self, raw_fs):
+        self._fs = raw_fs
+
+    async def _execute(self, method_name: str, platform_tag: str, client: httpx.AsyncClient, query: str, season: Optional[int] = None, episode: Optional[int] = None) -> list:
+        method = getattr(self._fs, method_name, None)
+        if method is None:
+            if method_name == "search_4khdhub" and hasattr(self._fs, "search_hdhub4u"):
+                method = getattr(self._fs, "search_hdhub4u")
+            else:
+                return []
+        try:
+            results = await method(client, query, season=season, episode=episode)
+        except TypeError:
+            results = await method(client, query)
+
+        tagged_results = []
+        if isinstance(results, list):
+            for item in results:
+                if isinstance(item, dict):
+                    tagged = dict(item)
+                    tagged["platform"] = platform_tag
+                    tagged_results.append(tagged)
+                else:
+                    tagged_results.append(item)
+        return tagged_results
+
+    async def search_uhdmovies(self, client: httpx.AsyncClient, query: str, season: Optional[int] = None, episode: Optional[int] = None) -> list:
+        return await self._execute("search_uhdmovies", "UHDMovies", client, query, season=season, episode=episode)
+
+    async def search_4khdhub(self, client: httpx.AsyncClient, query: str, season: Optional[int] = None, episode: Optional[int] = None) -> list:
+        return await self._execute("search_4khdhub", "4KHDHub", client, query, season=season, episode=episode)
+
+    async def search_hdhub4u(self, client: httpx.AsyncClient, query: str, season: Optional[int] = None, episode: Optional[int] = None) -> list:
+        return await self._execute("search_hdhub4u", "HDHub4u", client, query, season=season, episode=episode)
+
+    async def search_vegamovies(self, client: httpx.AsyncClient, query: str, season: Optional[int] = None, episode: Optional[int] = None) -> list:
+        return await self._execute("search_vegamovies", "VegaMovies", client, query, season=season, episode=episode)
+
+    async def search_olamovies(self, client: httpx.AsyncClient, query: str, season: Optional[int] = None, episode: Optional[int] = None) -> list:
+        return await self._execute("search_olamovies", "OlaMovies", client, query, season=season, episode=episode)
+
+    def __getattr__(self, name):
+        return getattr(self._fs, name)
 
 class ParallelMediaDispatcher:
     def __init__(self, db_path: str = None):
@@ -510,25 +602,26 @@ class ParallelMediaDispatcher:
             }
         return {}
 
-    async def stream_all_parallel(self, query: str):
+    async def stream_all_parallel(self, query: str, season: Optional[int] = None, episode: Optional[int] = None):
         """Simultaneous multi-source stream generator with series-first detection.
 
         Every source is wrapped in a per-source timeout so a single hung scraper
         (e.g. Telegram MTProto cold start) cannot stall the whole fleet response.
         """
         FLEET_SOURCE_TIMEOUT = 8.0  # seconds per source
-        is_series_query = bool(re.search(r'\b(season|series|episode|ep|s\d+|e\d+|\d+x\d+)\b', query, re.I))
+        is_series_query = bool(season is not None or episode is not None or re.search(r'\b(season|series|episode|ep|s\d+|e\d+|\d+x\d+)\b', query, re.I))
 
-        # Yield high-speed FastScrapers immediately (UHDMovies, VegaMovies, HDHub4u, OlaMovies)
+        # Yield high-speed FastScrapers immediately (UHDMovies, 4KHDHub, HDHub4u, VegaMovies, OlaMovies)
         async with httpx.AsyncClient(http2=True, limits=self.limits, follow_redirects=True) as client:
             from fast_scrapers import FastScrapers
-            fs = FastScrapers()
+            fs = _FastScraperFleetAdapter(FastScrapers())
 
             fast_tasks = [
-                fs.search_vegamovies(client, query),
-                fs.search_uhdmovies(client, query),
-                fs.search_olamovies(client, query),
-                fs.search_hdhub4u(client, query),
+                fs.search_uhdmovies(client, query, season=season, episode=episode),
+                fs.search_4khdhub(client, query, season=season, episode=episode),
+                fs.search_hdhub4u(client, query, season=season, episode=episode),
+                fs.search_vegamovies(client, query, season=season, episode=episode),
+                fs.search_olamovies(client, query, season=season, episode=episode),
                 self.fetch_local_db(query)
             ]
 

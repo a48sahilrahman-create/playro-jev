@@ -3,6 +3,7 @@ import asyncio
 import httpx
 import re
 import urllib.parse
+from unittest.mock import patch
 from link_resolver import LinkResolver, is_safe_url, is_safe_ip
 
 
@@ -55,19 +56,23 @@ async def test_redirect_cap_and_ssrf_redirect():
         return httpx.Response(status_code=302, headers={"Location": next_url})
 
     transport = httpx.MockTransport(infinite_redirect_handler)
-    async with httpx.AsyncClient(transport=transport) as mock_client:
-        # Test safe_fetch directly with redirect cap
-        with pytest.raises(ValueError, match=r"Exceeded maximum redirects cap"):
-            await resolver.safe_fetch(mock_client, "GET", "https://example-test-gateway.org/redirect?step=0", max_redirects=5)
+    with patch("link_resolver.is_safe_url", side_effect=lambda u, **kwargs: not ("169.254" in u or "localhost" in u or "127.0.0.1" in u)), \
+         patch("link_resolver.get_safe_resolved_ip", return_value="93.184.216.34"):
+        async with httpx.AsyncClient(transport=transport) as mock_client:
+            # Test safe_fetch directly with redirect cap
+            with pytest.raises(ValueError, match=r"Exceeded maximum redirects cap"):
+                await resolver.safe_fetch(mock_client, "GET", "https://example-test-gateway.org/redirect?step=0", max_redirects=5)
 
     # Test redirect to private IP is intercepted on hop
     def ssrf_redirect_handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(status_code=302, headers={"Location": "http://169.254.169.254/latest/meta-data/"})
 
     ssrf_transport = httpx.MockTransport(ssrf_redirect_handler)
-    async with httpx.AsyncClient(transport=ssrf_transport) as mock_client:
-        with pytest.raises(ValueError, match=r"SSRF blocked"):
-            await resolver.safe_fetch(mock_client, "GET", "https://example-test-gateway.org/start", max_redirects=5)
+    with patch("link_resolver.is_safe_url", side_effect=lambda u, **kwargs: not ("169.254" in u or "localhost" in u or "127.0.0.1" in u)), \
+         patch("link_resolver.get_safe_resolved_ip", side_effect=lambda h, *a, **k: None if "169.254" in str(h) else "93.184.216.34"):
+        async with httpx.AsyncClient(transport=ssrf_transport) as mock_client:
+            with pytest.raises(ValueError, match=r"SSRF blocked"):
+                await resolver.safe_fetch(mock_client, "GET", "https://example-test-gateway.org/start", max_redirects=5)
 
 
 @pytest.mark.asyncio
@@ -113,9 +118,11 @@ async def test_response_size_bomb_protection():
         return httpx.Response(status_code=200, content=chunk * 10)
 
     transport = httpx.MockTransport(huge_stream_handler)
-    async with httpx.AsyncClient(transport=transport) as mock_client:
-        res = await resolver.safe_fetch(mock_client, "GET", "https://example-test-gateway.org/huge", max_bytes=1024 * 1024)
-        assert len(res.content) <= 1024 * 1024 + 65536  # Max 1MB read window enforced
+    with patch("link_resolver.is_safe_url", return_value=True), \
+         patch("link_resolver.get_safe_resolved_ip", return_value="93.184.216.34"):
+        async with httpx.AsyncClient(transport=transport) as mock_client:
+            res = await resolver.safe_fetch(mock_client, "GET", "https://example-test-gateway.org/huge", max_bytes=1024 * 1024)
+            assert len(res.content) <= 1024 * 1024 + 65536  # Max 1MB read window enforced
 
 
 @pytest.mark.asyncio

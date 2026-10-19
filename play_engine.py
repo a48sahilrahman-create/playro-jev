@@ -17,6 +17,8 @@ import os
 import subprocess
 import shutil
 import re
+import difflib
+from typing import Optional
 
 from title_resolver import TitleResolver
 from fast_scrapers import FastScrapers
@@ -119,36 +121,38 @@ class PlayEngine:
         self.link_resolver = LinkResolver()
         self.vlc_path = find_vlc()
 
-    async def search(self, query: str) -> dict:
+    async def search(self, query: str, year: Optional[str] = None, imdb_id: Optional[str] = None, season: Optional[int] = None, episode: Optional[int] = None) -> dict:
         """
         Unified Live Multi-Source Parallel Search across VegaMovies, UHDMovies,
         HDHub4u, OlaMovies, Telegram, and YouTube.
+        Zero-Guessing Policy: The query passed is the authentic title.
         Zero stale local DB contamination.
         """
         t0 = time.perf_counter()
 
-        # Step 1: Resolve Title and spell-checking (< 50ms)
-        resolved_title = await self.resolver.resolve(query)
-        is_exact = resolved_title.get("status") == "EXACT_MATCH"
-        canonical_query = resolved_title.get("canonical_title") if is_exact else query.strip()
-        formatted_title = resolved_title.get("formatted") if is_exact else query.strip()
-        year = resolved_title.get("year") if is_exact else None
+        clean_title = query.strip()
+        search_queries = [clean_title]
+        if year:
+            clean_year = str(year).strip()
+            if clean_year and clean_year != "None":
+                yq = f"{clean_title} {clean_year}"
+                if yq not in search_queries:
+                    search_queries.append(yq)
+        if imdb_id and str(imdb_id).startswith("tt"):
+            if imdb_id not in search_queries:
+                search_queries.append(imdb_id)
 
-        # Step 2: Gather releases across all live parallel sources simultaneously
+        # Gather releases across all live parallel sources simultaneously
         all_candidates = []
         seen_targets = set()
 
-        search_queries = [query.strip()]
-        if canonical_query and canonical_query not in search_queries:
-            search_queries.append(canonical_query)
-        if year and str(year) not in search_queries[0]:
-            search_queries.append(f"{search_queries[0]} {year}")
-        if formatted_title and formatted_title not in search_queries:
-            search_queries.append(formatted_title)
-
         for sq in search_queries:
             try:
-                async for batch in self.dispatcher.stream_all_parallel(sq):
+                try:
+                    stream_iter = self.dispatcher.stream_all_parallel(sq, season=season, episode=episode)
+                except TypeError:
+                    stream_iter = self.dispatcher.stream_all_parallel(sq)
+                async for batch in stream_iter:
                     if isinstance(batch, list):
                         for item in batch:
                             target = item.get("target_url") or item.get("direct_url") or ""
@@ -168,10 +172,13 @@ class PlayEngine:
         return {
             "status": "CATALOG_FOUND" if sorted_releases else "NO_RESULTS",
             "source": "live_multi_parallel_fleet",
-            "query": query,
-            "canonical_title": canonical_query,
-            "formatted_title": formatted_title,
+            "query": clean_title,
+            "canonical_title": clean_title,
+            "formatted_title": clean_title,
             "year": year,
+            "imdb_id": imdb_id,
+            "season": season,
+            "episode": episode,
             "count": len(sorted_releases),
             "releases": sorted_releases,
             "total_ms": round(total_ms, 2)
@@ -340,6 +347,8 @@ def main():
     # Search (Phase 1)
     p_search = subparsers.add_parser("search")
     p_search.add_argument("query")
+    p_search.add_argument("--year", default=None, help="Release year filter")
+    p_search.add_argument("--imdb-id", "--imdb", dest="imdb_id", default=None, help="IMDb ID filter")
     p_search.add_argument("--json", action="store_true")
 
     # Resolve (Phase 2)
@@ -377,7 +386,7 @@ def main():
             print(f"  • Latencies   : Title: {lb.get('title_ms')}ms | Scrape: {lb.get('scrape_ms')}ms | Resolve+Verify: {lb.get('resolve_verify_ms')}ms | Launch: {lb.get('launch_ms')}ms\n")
 
     elif args.command == "search":
-        result = asyncio.run(engine.search(args.query))
+        result = asyncio.run(engine.search(args.query, year=getattr(args, "year", None), imdb_id=getattr(args, "imdb_id", None)))
         if getattr(args, "json", False):
             print(json.dumps(result, indent=2))
         else:

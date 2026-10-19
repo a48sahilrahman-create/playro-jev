@@ -25,10 +25,11 @@ async def test_stream_all_parallel_concurrency_and_timeout():
         await asyncio.sleep(0.05)
         return [{"platform": "Telegram Bot", "target_url": "tg://123", "resolution": "1080p", "codec": "HEVC", "size": "1.5GB", "audio": "AAC"}]
 
-    with patch.object(dispatcher, "fetch_vegamovies", side_effect=mock_fetch_fast), \
-         patch.object(dispatcher, "fetch_uhdmovies", side_effect=mock_fetch_slow), \
-         patch.object(dispatcher, "fetch_hdhub4u", side_effect=mock_fetch_fast), \
-         patch.object(dispatcher, "fetch_olamovies", side_effect=mock_fetch_fast), \
+    with patch("fast_scrapers.FastScrapers.search_vegamovies", side_effect=mock_fetch_fast), \
+         patch("fast_scrapers.FastScrapers.search_uhdmovies", side_effect=mock_fetch_slow), \
+         patch("fast_scrapers.FastScrapers.search_hdhub4u", side_effect=mock_fetch_fast), \
+         patch("fast_scrapers.FastScrapers.search_olamovies", side_effect=mock_fetch_fast), \
+         patch.object(dispatcher, "fetch_local_db", new_callable=AsyncMock, return_value=[]), \
          patch.object(dispatcher, "fetch_telegram", side_effect=mock_fetch_tg), \
          patch.object(dispatcher, "fetch_youtube", side_effect=mock_fetch_fast):
 

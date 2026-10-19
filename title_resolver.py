@@ -27,6 +27,8 @@ POPULAR_CATALOG = [
     "Avengers: Infinity War (2018)",
     "The Avengers (2012)",
     "Avengers: Age of Ultron (2015)",
+    "Avengers: Doomsday (2026)",
+    "Avengers: Secret Wars (2027)",
     "Oppenheimer (2023)",
     "Interstellar (2014)",
     "Inception (2010)",
@@ -35,8 +37,10 @@ POPULAR_CATALOG = [
     "The Dark Knight (2008)",
     "The Dark Knight Rises (2012)",
     "Batman Begins (2005)",
+    "The Batman (2022)",
     "Avatar (2009)",
     "Avatar: The Way of Water (2022)",
+    "Avatar: Fire and Ash (2025)",
     "Deadpool & Wolverine (2024)",
     "Gladiator II (2024)",
     "Gladiator (2000)",
@@ -47,7 +51,6 @@ POPULAR_CATALOG = [
     "Spider-Man: Across the Spider-Verse (2023)",
     "Spider-Man: Into the Spider-Verse (2018)",
     "Top Gun: Maverick (2022)",
-    "The Batman (2022)",
     "Titanic (1997)",
     "The Matrix (1999)",
     "Fight Club (1999)",
@@ -57,8 +60,38 @@ POPULAR_CATALOG = [
     "The Godfather (1972)",
     "Coherence (2013)",
     "Stolen Girl (2025)",
+    "Alien: Romulus (2024)",
+    "Twisters (2024)",
+    "Civil War (2024)",
+    "Beetlejuice Beetlejuice (2024)",
+    "Inside Out 2 (2024)",
+    "Moana 2 (2024)",
+    "Wicked (2024)",
+    "Nosferatu (2024)",
+    "The Substance (2024)",
+    "Anora (2024)",
+    "Captain America: Brave New World (2025)",
+    "Superman (2025)",
+    "Fantastic Four: First Steps (2025)",
+    "Mission: Impossible - The Final Reckoning (2025)",
+    "Thunderbolts* (2025)",
+    "Before (2024)",
+    "Divergent (2014)",
+    "The End of Watch (2012)",
+    "End of Watch (2012)",
+    "The End of Us (2021)",
+    "The End of the F***ing World (2017)",
+    "The End of the World (2013)",
+    "Akira (1988)",
+    "Akira (2016)",
+    "Kung Uulitin (2024)",
+    "Kung Uulitin Man (2024)",
 
     # Top Global TV Series & Anime
+    "Red Queen (2024)",
+    "Reina Roja (2024)",
+    "The Penguin (2024)",
+    "Fallout (2024)",
     "House of the Dragon (2022)",
     "Game of Thrones (2011)",
     "Stranger Things (2016)",
@@ -70,6 +103,9 @@ POPULAR_CATALOG = [
     "The Last of Us (2023)",
     "Succession (2018)",
     "Peaky Blinders (2013)",
+    "Squid Game: Season 2 (2024)",
+    "Squid Game (2021)",
+    "Baby Reindeer (2024)",
     "Attack on Titan (2013)",
     "Death Note (2006)",
     "Jujutsu Kaisen (2020)",
@@ -90,6 +126,7 @@ POPULAR_CATALOG = [
     "Premam (2015)",
     "Kumbalangi Nights (2019)",
     "Lucifer (2019)",
+    "L2: Empuraan (2025)",
     "Bheeshma Parvam (2022)",
     "Aavesham (2024)",
     "Manjummel Boys (2024)",
@@ -98,6 +135,8 @@ POPULAR_CATALOG = [
     "Kishkindha Kaandam (2024)",
     "ARM (Ajayante Randam Moshanam) (2024)",
     "Balan The Boy (2026)",
+    "Marco (2024)",
+    "Barroz (2024)",
     "Sandesham (1991)",
     "Spadikam (1995)",
     "Devasuram (1993)",
@@ -120,6 +159,12 @@ POPULAR_CATALOG = [
     "Great Indian Kitchen (2021)",
 
     # Bollywood & Pan-India Blockbusters
+    "Raja (1995)",
+    "Raja Saab (2025)",
+    "The Raja Saab (2025)",
+    "Raja Shivaji (2026)",
+    "Tumbbad (2018)",
+    "Tumbbad (2024)",
     "Stree 2 (2024)",
     "Kalki 2898 AD (2024)",
     "Jawan (2023)",
@@ -138,7 +183,6 @@ POPULAR_CATALOG = [
     "Mirzapur (2018)",
     "Panchayat (2020)",
     "Sacred Games (2018)",
-    "Tumbbad (2018)",
     "Kantara (2022)",
     "Leo (2023)",
     "Jailer (2023)",
@@ -146,6 +190,17 @@ POPULAR_CATALOG = [
     "Salaar: Part 1 - Ceasefire (2023)",
     "Ponniyin Selvan: Part I (2022)",
     "Ponniyin Selvan: Part II (2023)",
+    "Devara: Part 1 (2024)",
+    "Singham Again (2024)",
+    "Bhool Bhulaiyaa 3 (2024)",
+    "Chhaava (2024)",
+    "Toxic (2025)",
+    "Spirit (2025)",
+    "Game Changer (2025)",
+    "Vettaiyan (2024)",
+    "Kanguva (2024)",
+    "Amaran (2024)",
+    "Thug Life (2025)",
 ]
 
 NUM_WORD_MAP = {
@@ -160,11 +215,68 @@ def _normalize_title_text(text: str) -> str:
     """Normalize text for fuzzy comparison by removing punctuation and normalizing numerals."""
     if not text:
         return ""
-    t = re.sub(r'\s*\(\d{4}\)', '', text)
+    t = re.sub(r'\bf[\*\#\@!_\-]+ing\b', 'fucking', text, flags=re.I)
+    t = re.sub(r'\s*\(\d{4}\)', '', t)
     t = re.sub(r'[^a-zA-Z0-9\s]', ' ', t)
     words = t.lower().split()
     norm_words = [NUM_WORD_MAP.get(w, w) for w in words]
     return re.sub(r'\s+', ' ', " ".join(norm_words)).strip()
+
+
+def _soundex(s: str) -> str:
+    """Standard American Soundex algorithm (O(N), ~1 microsecond) for phonetic matching."""
+    if not s:
+        return ""
+    s = s.upper()
+    mapping = {
+        'B': '1', 'F': '1', 'P': '1', 'V': '1',
+        'C': '2', 'G': '2', 'J': '2', 'K': '2', 'Q': '2', 'S': '2', 'X': '2', 'Z': '2',
+        'D': '3', 'T': '3',
+        'L': '4',
+        'M': '5', 'N': '5',
+        'R': '6'
+    }
+    encoded = [s[0]]
+    prev = mapping.get(s[0], '0')
+    for char in s[1:]:
+        code = mapping.get(char, '0')
+        if code != '0':
+            if code != prev:
+                encoded.append(code)
+            prev = code
+        else:
+            prev = '0'
+    res = "".join(encoded).replace('0', '')
+    return (res + "0000")[:4]
+
+
+def _phonetic_clean(w: str) -> str:
+    """Map common phonetic confusions to canonical phonetic consonants."""
+    w = w.lower().replace('ph', 'f').replace('ck', 'k')
+    tr = str.maketrans('bpvckzq', 'ddkksks')
+    return w.translate(tr)
+
+
+def _word_similarity(w1: str, w2: str) -> float:
+    """Compute hybrid phonetic, edit-distance, and prefix similarity between two words."""
+    if w1 == w2:
+        return 1.0
+    r = difflib.SequenceMatcher(None, w1, w2).ratio()
+    pr = difflib.SequenceMatcher(None, _phonetic_clean(w1), _phonetic_clean(w2)).ratio()
+    best = max(r, pr)
+    if len(w1) >= 3 and len(w2) >= 3:
+        s1, s2 = _soundex(w1), _soundex(w2)
+        if s1 == s2 and best >= 0.50:
+            best = max(best, 0.88)
+        elif s1[:3] == s2[:3] and best >= 0.40:
+            best = max(best, 0.72)
+        elif s1[1:] == s2[1:] and s1[0] in 'BPVDT' and s2[0] in 'BPVDT' and best >= 0.40:
+            best = max(best, 0.72)
+        if w1[:3] == w2[:3] and (min(len(w1), len(w2)) / max(len(w1), len(w2))) >= 0.40:
+            best = max(best, 0.70)
+        if w1 in w2 or w2 in w1:
+            best = max(best, min(len(w1), len(w2)) / max(len(w1), len(w2)))
+    return round(best, 3)
 
 
 class TitleResolver:
@@ -266,9 +378,9 @@ class TitleResolver:
         return results
 
     def _query_local_catalog(self, query: str) -> list:
-        """Fast in-memory fuzzy match (< 0.2ms) with token, numeral and similarity matching."""
+        """Fast in-memory fuzzy match (< 0.2ms) with token, phonetic, numeral and similarity matching."""
         clean_q = _normalize_title_text(query)
-        if not clean_q:
+        if not clean_q or len(clean_q) < 2:
             return []
 
         results = []
@@ -279,34 +391,60 @@ class TitleResolver:
         if not q_words:
             q_words = clean_q.split()
 
+        q_set = set(q_words)
+        sorted_q = " ".join(sorted(q_words))
+
         for original in POPULAR_CATALOG:
             norm_orig = _normalize_title_text(original)
+            if not norm_orig:
+                continue
+
             year_match = re.search(r'\((\d{4})\)', original)
             title_name = re.sub(r'\s*\(\d{4}\)', '', original).strip()
 
-            ratio = difflib.SequenceMatcher(None, clean_q, norm_orig).ratio()
+            if clean_q == norm_orig:
+                score = 1.0
+            else:
+                raw_ratio = difflib.SequenceMatcher(None, clean_q, norm_orig).ratio()
 
-            orig_words = [w for w in norm_orig.split() if w not in stop_words]
-            if not orig_words:
-                orig_words = norm_orig.split()
+                orig_words = [w for w in norm_orig.split() if w not in stop_words]
+                if not orig_words:
+                    orig_words = norm_orig.split()
 
-            word_match_scores = []
-            for qw in q_words:
-                best_w = max([difflib.SequenceMatcher(None, qw, ow).ratio() for ow in orig_words]) if orig_words else 0
-                word_match_scores.append(best_w)
+                orig_set = set(orig_words)
 
-            avg_word_score = sum(word_match_scores) / max(len(word_match_scores), 1)
-            has_keyword_match = any(qw in orig_words or any(difflib.SequenceMatcher(None, qw, ow).ratio() >= 0.85 for ow in orig_words) for qw in q_words)
+                # Word order permutation check (e.g. 'saab raja' -> 'raja saab', 'watch end of' -> 'end of watch')
+                sorted_orig = " ".join(sorted(orig_words))
+                token_sort_ratio = difflib.SequenceMatcher(None, sorted_q, sorted_orig).ratio()
 
-            if clean_q == norm_orig or (ratio >= 0.80 and has_keyword_match) or (avg_word_score >= 0.85 and has_keyword_match):
-                score = max(ratio, avg_word_score)
+                # Token set intersection
+                common_tokens = q_set & orig_set
+                exact_intersection = len(common_tokens) / max(min(len(q_set), len(orig_set)), 1)
+
+                # Forward word similarities (how well each query word matches the best catalog word)
+                fwd_scores = [max([_word_similarity(qw, ow) for ow in orig_words]) for qw in q_words]
+                avg_fwd = sum(fwd_scores) / len(fwd_scores)
+
+                # Backward word similarities (how well catalog words are covered)
+                bwd_scores = [max([_word_similarity(ow, qw) for qw in q_words]) for ow in orig_words]
+                avg_bwd = sum(bwd_scores) / len(bwd_scores)
+
+                token_sim = (avg_fwd + avg_bwd) / 2.0
+
+                score = max(raw_ratio, token_sort_ratio, avg_fwd, token_sim)
+
+                # Boost exact token set containment (handles permutations and subsets)
+                if exact_intersection == 1.0:
+                    score = max(score, 0.85)
+
+            if score >= 0.70:
                 if original not in seen:
                     seen.add(original)
                     results.append({
                         "title": title_name,
                         "year": int(year_match.group(1)) if year_match else None,
                         "formatted": original,
-                        "score": score,
+                        "score": round(score, 3),
                         "source": "local_catalog"
                     })
 
@@ -345,140 +483,166 @@ class TitleResolver:
         if not clean_input:
             clean_input = raw_query
 
-        # Layer 1: Check local catalog exact match (< 0.1ms)
         norm_clean = _normalize_title_text(clean_input)
-        for cat_item in POPULAR_CATALOG:
-            norm_cat = _normalize_title_text(cat_item)
-            cat_name = re.sub(r'\s*\(\d{4}\)', '', cat_item).strip()
-            if norm_clean == norm_cat or norm_clean == _normalize_title_text(cat_name):
-                year_match = re.search(r'\((\d{4})\)', cat_item)
-                elapsed = (time.perf_counter() - t0) * 1000
-                return {
-                    "status": "EXACT_MATCH",
-                    "canonical_title": cat_name,
-                    "year": int(year_match.group(1)) if year_match else None,
-                    "formatted": cat_item,
-                    "suggestions": [],
-                    "elapsed_ms": round(elapsed, 2)
-                }
 
-        local_fuzzy = self._query_local_catalog(clean_input)
-
-        # Fast path: If exact normalized match or very high confidence local fuzzy match (>=0.90 score), return immediately (< 1ms)
-        if local_fuzzy and local_fuzzy[0]["score"] >= 0.90:
-            top = local_fuzzy[0]
-            top_clean = re.sub(r'\s*\(\d{4}\)', '', top["formatted"]).strip()
-            norm_top = _normalize_title_text(top_clean)
-
-            elapsed = (time.perf_counter() - t0) * 1000
-            if norm_clean == norm_top:
-                return {
-                    "status": "EXACT_MATCH",
-                    "canonical_title": top.get("title", top_clean),
-                    "year": top.get("year"),
-                    "formatted": top["formatted"],
-                    "suggestions": [],
-                    "elapsed_ms": round(elapsed, 2)
-                }
-            else:
-                return {
-                    "status": "SUGGESTIONS_FOUND",
-                    "original_query": raw_query,
-                    "canonical_title": clean_input.title(),
-                    "year": None,
-                    "formatted": clean_input.title(),
-                    "suggestions": [f["formatted"] for f in local_fuzzy[:4]],
-                    "elapsed_ms": round(elapsed, 2)
-                }
-
-        # Layer 2: Query APIs concurrently using async connection pool with tight timeouts
-        imdb_res = []
-        google_res = []
         try:
-            limits = httpx.Limits(max_keepalive_connections=20, max_connections=50)
-            async with httpx.AsyncClient(http2=True, limits=limits, headers=self.headers) as client:
-                imdb_task = self._query_imdb_suggest(client, clean_input)
-                google_task = self._query_google_suggest(client, clean_input)
-                res_imdb, res_google = await asyncio.gather(imdb_task, google_task, return_exceptions=True)
+            # Layer 1: Check local catalog exact match (< 0.1ms)
+            for cat_item in POPULAR_CATALOG:
+                norm_cat = _normalize_title_text(cat_item)
+                cat_name = re.sub(r'\s*\(\d{4}\)', '', cat_item).strip()
+                if norm_clean == norm_cat or norm_clean == _normalize_title_text(cat_name):
+                    year_match = re.search(r'\((\d{4})\)', cat_item)
+                    elapsed = (time.perf_counter() - t0) * 1000
+                    return {
+                        "status": "EXACT_MATCH",
+                        "canonical_title": cat_name,
+                        "year": int(year_match.group(1)) if year_match else None,
+                        "formatted": cat_item,
+                        "suggestions": [],
+                        "elapsed_ms": round(elapsed, 2)
+                    }
 
-                if isinstance(res_imdb, list):
-                    imdb_res = res_imdb
-                if isinstance(res_google, list):
-                    google_res = res_google
+            local_fuzzy = self._query_local_catalog(clean_input)
 
-                # Layer 3: If IMDb & Google suggestions are empty on a multi-word phrase, try prefix / web snippet
-                if not imdb_res and not google_res and not local_fuzzy:
-                    words = clean_input.split()
-                    if len(words) > 1:
-                        prefix_query = " ".join(words[:2])
+            # Fast path: If exact normalized match or very high confidence local fuzzy match (>=0.90 score), return immediately (< 1ms)
+            if local_fuzzy and local_fuzzy[0]["score"] >= 0.90:
+                top = local_fuzzy[0]
+                top_clean = re.sub(r'\s*\(\d{4}\)', '', top["formatted"]).strip()
+                norm_top = _normalize_title_text(top_clean)
+
+                elapsed = (time.perf_counter() - t0) * 1000
+                if norm_clean == norm_top:
+                    return {
+                        "status": "EXACT_MATCH",
+                        "canonical_title": top.get("title", top_clean),
+                        "year": top.get("year"),
+                        "formatted": top["formatted"],
+                        "suggestions": [],
+                        "elapsed_ms": round(elapsed, 2)
+                    }
+                else:
+                    return {
+                        "status": "SUGGESTIONS_FOUND",
+                        "original_query": raw_query,
+                        "canonical_title": clean_input.title(),
+                        "year": None,
+                        "formatted": clean_input.title(),
+                        "suggestions": [f["formatted"] for f in local_fuzzy[:4]],
+                        "elapsed_ms": round(elapsed, 2)
+                    }
+
+            # Layer 2: Query APIs concurrently using async connection pool with tight timeouts
+            imdb_res = []
+            google_res = []
+            try:
+                limits = httpx.Limits(max_keepalive_connections=20, max_connections=50)
+                async with httpx.AsyncClient(http2=True, limits=limits, headers=self.headers) as client:
+                    imdb_task = self._query_imdb_suggest(client, clean_input)
+                    google_task = self._query_google_suggest(client, clean_input)
+                    res_imdb, res_google = await asyncio.gather(imdb_task, google_task, return_exceptions=True)
+
+                    if isinstance(res_imdb, list):
+                        imdb_res = res_imdb
+                    if isinstance(res_google, list):
+                        google_res = res_google
+
+                    # Layer 3: If IMDb & Google suggestions are empty on a multi-word phrase, try prefix / web snippet
+                    if not imdb_res and not google_res and not local_fuzzy:
+                        words = clean_input.split()
+                        if len(words) > 1:
+                            prefix_query = " ".join(words[:2])
+                            try:
+                                prefix_res = await self._query_imdb_suggest(client, prefix_query)
+                                if prefix_res:
+                                    imdb_res.extend(prefix_res)
+                            except Exception:
+                                pass
+
                         try:
-                            prefix_res = await self._query_imdb_suggest(client, prefix_query)
-                            if prefix_res:
-                                imdb_res.extend(prefix_res)
+                            web_res = await self._query_web_snippet_search(client, clean_input)
+                            google_res.extend(web_res)
                         except Exception:
                             pass
+            except Exception:
+                pass
 
-                    try:
-                        web_res = await self._query_web_snippet_search(client, clean_input)
-                        google_res.extend(web_res)
-                    except Exception:
-                        pass
+            # Merge suggestions (prioritize Local Fuzzy if available, then IMDb, then Google/Web)
+            candidates = []
+            seen = set()
+
+            for item in local_fuzzy + imdb_res + google_res:
+                key = item["formatted"].lower()
+                if key not in seen:
+                    seen.add(key)
+                    candidates.append(item)
+
+            elapsed = (time.perf_counter() - t0) * 1000
+
+            if candidates:
+                top = candidates[0]
+                top_clean = re.sub(r'\s*\(\d{4}\)', '', top["formatted"]).strip()
+                norm_top = _normalize_title_text(top_clean)
+
+                if norm_clean == norm_top:
+                    return {
+                        "status": "EXACT_MATCH",
+                        "canonical_title": top.get("title", top_clean),
+                        "year": top.get("year"),
+                        "formatted": top["formatted"],
+                        "suggestions": [],
+                        "elapsed_ms": round(elapsed, 2)
+                    }
+                else:
+                    # Typo detected or suggested alternate spelling (preserve user's clean query as canonical_title!)
+                    unique_suggestions = []
+                    for c in candidates:
+                        fmt = c["formatted"]
+                        if fmt not in unique_suggestions:
+                            unique_suggestions.append(fmt)
+
+                    return {
+                        "status": "SUGGESTIONS_FOUND",
+                        "original_query": raw_query,
+                        "canonical_title": clean_input.title(),
+                        "year": None,
+                        "formatted": clean_input.title(),
+                        "suggestions": unique_suggestions[:4],
+                        "elapsed_ms": round(elapsed, 2)
+                    }
+
+            # Fallback if no suggestions found (non-existent title or random string)
+            return {
+                "status": "NO_MATCH",
+                "canonical_title": clean_input.title(),
+                "year": None,
+                "formatted": clean_input.title(),
+                "suggestions": [],
+                "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
+            }
         except Exception:
-            pass
-
-        # Merge suggestions (prioritize Local Fuzzy if available, then IMDb, then Google/Web)
-        candidates = []
-        seen = set()
-
-        for item in local_fuzzy + imdb_res + google_res:
-            key = item["formatted"].lower()
-            if key not in seen:
-                seen.add(key)
-                candidates.append(item)
-
-        elapsed = (time.perf_counter() - t0) * 1000
-
-        if candidates:
-            top = candidates[0]
-            top_clean = re.sub(r'\s*\(\d{4}\)', '', top["formatted"]).strip()
-            norm_top = _normalize_title_text(top_clean)
-
-            if norm_clean == norm_top:
-                return {
-                    "status": "EXACT_MATCH",
-                    "canonical_title": top.get("title", top_clean),
-                    "year": top.get("year"),
-                    "formatted": top["formatted"],
-                    "suggestions": [],
-                    "elapsed_ms": round(elapsed, 2)
-                }
-            else:
-                # Typo detected or suggested alternate spelling (preserve user's clean query as canonical_title!)
-                unique_suggestions = []
-                for c in candidates:
-                    fmt = c["formatted"]
-                    if fmt not in unique_suggestions:
-                        unique_suggestions.append(fmt)
-
-                return {
-                    "status": "SUGGESTIONS_FOUND",
-                    "original_query": raw_query,
-                    "canonical_title": clean_input.title(),
-                    "year": None,
-                    "formatted": clean_input.title(),
-                    "suggestions": unique_suggestions[:4],
-                    "elapsed_ms": round(elapsed, 2)
-                }
-
-        # Fallback if no suggestions found (non-existent title or random string)
-        return {
-            "status": "NO_MATCH",
-            "canonical_title": clean_input.title(),
-            "year": None,
-            "formatted": clean_input.title(),
-            "suggestions": [],
-            "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
-        }
+            # Fallback to local catalog if any unhandled error occurs
+            try:
+                local_fallback = self._query_local_catalog(clean_input)
+                if local_fallback:
+                    return {
+                        "status": "SUGGESTIONS_FOUND",
+                        "original_query": raw_query,
+                        "canonical_title": clean_input.title(),
+                        "year": None,
+                        "formatted": clean_input.title(),
+                        "suggestions": [f["formatted"] for f in local_fallback[:4]],
+                        "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
+                    }
+            except Exception:
+                pass
+            return {
+                "status": "NO_MATCH",
+                "canonical_title": clean_input.title(),
+                "year": None,
+                "formatted": clean_input.title(),
+                "suggestions": [],
+                "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
+            }
 
 
 if __name__ == "__main__":

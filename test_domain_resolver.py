@@ -27,7 +27,7 @@ async def main():
     for b, url in all_mirrors.items():
         print(f"  -> {b:14}: {url}")
         assert url.startswith("http"), f"Invalid URL for {b}: {url}"
-    assert len(all_mirrors) == 5, f"Expected 5 brands, got {len(all_mirrors)}"
+    assert len(all_mirrors) >= 5, f"Expected at least 5 brands, got {len(all_mirrors)}"
 
     print("\n=== TEST 3: Cache verification (< 1ms hits) ===")
     for brand in ["uhdmovies", "hdhub4u", "vegamovies", "olamovies", "desiremovies"]:

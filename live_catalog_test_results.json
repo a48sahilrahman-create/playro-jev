@@ -1,0 +1,33 @@
+{
+  "pingora_dns": {
+    "status_code": 200,
+    "latency_ms": 75.04439999956958,
+    "raw_c": "aHR0cHM6Ly9uZXc4LmhkaHViNHUuY2wvP3V0bT1tbjE=",
+    "raw_h": "aGRodWI0dS5rZw==",
+    "decoded_c": "https://new8.hdhub4u.cl/?utm=mn1",
+    "decoded_h": "hdhub4u.kg",
+    "clean_host": "https://new8.hdhub4u.cl",
+    "probe_status": 200,
+    "probe_latency_ms": 63.07419999939157
+  },
+  "pingora_typesense": {
+    "status_code": 200,
+    "latency_ms": 83.03969999997207,
+    "found": 14,
+    "hits_count": 10,
+    "first_title": "Batman & Robin (1997) BluRay [Hindi (DD5.1) & English] 1080p 720p & 480p Dual Audio [x264] | Full Movie",
+    "first_permalink": "https://new2.hdhub4u.free/batman-robin-1997-hindi-bluray-full-movie/",
+    "search_time_ms": 1
+  },
+  "vegamovies_ts_search": {
+    "active_mirror": "https://new1.vegamovies.lease",
+    "landing_url": "https://1vegamovies.baby",
+    "resolution_latency_ms": 589.3238999997266,
+    "search_status_code": 200,
+    "search_latency_ms": 330.7308000003104,
+    "hits_count": 15,
+    "found": 30,
+    "first_title": "Download Scooby-Doo & Batman: The Brave and the Bold (2018) WEB-DL Dual Audio {Hindi-English} 480p [250MB] | 720p [650MB] | 1080p [1.5GB]",
+    "first_permalink": "/download-scooby-doo-batman-the-brave-and-the-bold-2018-hindi-dubbed-full-movie-480p-720p-1080p-web-dl/"
+  }
+}

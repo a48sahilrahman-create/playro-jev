@@ -24,12 +24,13 @@ import urllib.parse
 import os
 import ipaddress
 import socket
+import codecs
 import logging
 from typing import Optional, List, Dict, Any, Set, Tuple
 
 import httpx
 from bs4 import BeautifulSoup
-from auth_bridge import InteractiveAuthBridge
+from auth_bridge import InteractiveAuthBridge, extract_b64_redirect_url, try_click_turnstile
 
 try:
     from gateway_classifier import GatewayClassifier, CDN_RULES
@@ -272,6 +273,222 @@ def install_dns_ssrf_guard(loop: Optional[asyncio.AbstractEventLoop] = None) -> 
 
     loop.getaddrinfo = safe_getaddrinfo
     loop._ssrf_guard_installed = True
+
+
+HUBCLOUD_GATEWAY_DOMAINS = (
+    "hubcloud.one",
+    "hubcloud.club",
+    "hubdrive.pics",
+    "gamerxyt.com",
+    "hubcloud.",
+    "hubdrive.",
+)
+
+
+def _decode_greenmotors_token(token: str) -> Optional[str]:
+    """
+    Deobfuscates 5-layer GreenMotors client-side JS challenge token:
+    Base64 -> Base64 -> ROT13 -> Base64 -> JSON -> Base64(o) -> HubCloud URL
+    """
+    if not token or not isinstance(token, str):
+        return None
+    try:
+        s1 = base64.b64decode(token).decode("latin1")
+        s2 = base64.b64decode(s1).decode("latin1")
+        s3 = codecs.decode(s2, "rot_13")
+        s4 = base64.b64decode(s3).decode("utf-8")
+        data = json.loads(s4)
+        if isinstance(data, dict) and "o" in data:
+            hub_url = base64.b64decode(data["o"]).decode("utf-8").strip()
+            if hub_url.startswith("http"):
+                return hub_url
+    except Exception as e:
+        logger.debug(f"[GreenMotors Deobf] Decoding failed: {e}")
+    return None
+
+
+async def resolve_gateway_url(url: str, client: Optional[httpx.AsyncClient] = None) -> str:
+    """
+    Resolves intermediary gateway URLs (greenmotors.club, greenmotors.cc, hdstream4u.com)
+    into downstream HubCloud, Gamerxyt, HubDrive, or direct playable stream URLs.
+    Handles redirects (follow_redirects=True) and HTML inspections for JS redirects and links.
+    """
+    if not url or not isinstance(url, str):
+        return ""
+
+    url_str = url.strip()
+    is_greenmotors = any(domain in url_str for domain in ["greenmotors.club", "greenmotors.cc"])
+    is_hdstream4u = "hdstream4u.com" in url_str
+
+    if not (is_greenmotors or is_hdstream4u):
+        return url_str
+
+    close_client = False
+    if client is None:
+        client = httpx.AsyncClient(http2=True, headers=DEFAULT_HEADERS, timeout=HOP_TIMEOUT)
+        close_client = True
+
+    try:
+        req_headers = dict(DEFAULT_HEADERS)
+        req_headers["Referer"] = url_str
+
+        # Follow redirects to capture 301/302/307/308 transitions
+        r = await client.get(url_str, headers=req_headers, follow_redirects=True, timeout=HOP_TIMEOUT)
+        final_url_str = str(r.url)
+
+        # Check redirect history for target domains
+        if hasattr(r, "history") and r.history:
+            for hop in r.history:
+                hop_url = str(hop.url)
+                if any(dom in hop_url for dom in HUBCLOUD_GATEWAY_DOMAINS) and not any(gm in hop_url for gm in ["greenmotors.club", "greenmotors.cc"]):
+                    return hop_url
+
+        # Check final redirected URL
+        if is_greenmotors:
+            if any(dom in final_url_str for dom in HUBCLOUD_GATEWAY_DOMAINS) and not any(gm in final_url_str for gm in ["greenmotors.club", "greenmotors.cc"]):
+                return final_url_str
+        elif is_hdstream4u:
+            if (any(dom in final_url_str for dom in HUBCLOUD_GATEWAY_DOMAINS) or any(ext in final_url_str.lower() for ext in [".mp4", ".mkv"])) and "hdstream4u.com" not in final_url_str:
+                return final_url_str
+
+        html = r.text
+        if not html:
+            return url_str
+
+        soup = BeautifulSoup(html, "html.parser")
+
+        # 1. Inspect GreenMotors gateways
+        if is_greenmotors:
+            # 1a. GreenMotors 5-layer JavaScript challenge deobfuscation
+            # Pattern: s('o', '<token>', ...) or localStorage.setItem('o', '<token>') or {"o": "<token>"}
+            token_match = re.search(
+                r"(?:s\(\s*['\"]o['\"]\s*,\s*|localStorage\.setItem\(\s*['\"]o['\"]\s*,\s*|['\"]o['\"]\s*:\s*)['\"]([A-Za-z0-9+/=]{40,})['\"]",
+                html
+            )
+            if token_match:
+                decoded_hub_url = _decode_greenmotors_token(token_match.group(1).strip())
+                if decoded_hub_url and any(dom in decoded_hub_url for dom in HUBCLOUD_GATEWAY_DOMAINS):
+                    return decoded_hub_url
+
+            # 1b. Check if token or payload is embedded in homelander landing page
+            homelander_match = re.search(r'["\'](https?://[^"\']*/homelander/[^"\']*)["\']', html)
+            if homelander_match:
+                hl_url = homelander_match.group(1)
+                try:
+                    r_hl = await client.get(hl_url, headers=req_headers, follow_redirects=True, timeout=HOP_TIMEOUT)
+                    hl_token_match = re.search(
+                        r"(?:s\(\s*['\"]o['\"]\s*,\s*|localStorage\.setItem\(\s*['\"]o['\"]\s*,\s*|['\"]o['\"]\s*:\s*)['\"]([A-Za-z0-9+/=]{40,})['\"]",
+                        r_hl.text
+                    )
+                    if hl_token_match:
+                        decoded_hub_url = _decode_greenmotors_token(hl_token_match.group(1).strip())
+                        if decoded_hub_url and any(dom in decoded_hub_url for dom in HUBCLOUD_GATEWAY_DOMAINS):
+                            return decoded_hub_url
+                except Exception as hl_err:
+                    logger.debug(f"[GreenMotors Homelander Fetch Error] {hl_err}")
+            # Check JS location replacement
+            loc_patterns = [
+                r'window\.location\.replace\(\s*["\']([^"\']+)["\']\s*\)',
+                r'location\.replace\(\s*["\']([^"\']+)["\']\s*\)',
+                r'window\.location\.href\s*=\s*["\']([^"\']+)["\']',
+                r'location\.href\s*=\s*["\']([^"\']+)["\']',
+                r'window\.location\s*=\s*["\']([^"\']+)["\']',
+                r'location\s*=\s*["\']([^"\']+)["\']',
+            ]
+            for pat in loc_patterns:
+                for match in re.finditer(pat, html, re.I):
+                    cand = match.group(1).replace(r'\/', '/').replace(r'\"', '').replace(r"\'", '').replace('&amp;', '&').strip()
+                    cand_full = urllib.parse.urljoin(final_url_str, cand)
+                    if any(dom in cand_full for dom in HUBCLOUD_GATEWAY_DOMAINS):
+                        return cand_full
+
+            # Check <a href="..."> tags
+            for a in soup.find_all("a", href=True):
+                href = a["href"].strip()
+                if not href or href.startswith("#") or href.startswith("javascript:"):
+                    continue
+                full_href = urllib.parse.urljoin(final_url_str, href).replace('&amp;', '&')
+                if any(dom in full_href for dom in HUBCLOUD_GATEWAY_DOMAINS):
+                    return full_href
+
+            # Check meta refresh tag
+            for meta in soup.find_all("meta", attrs={"http-equiv": re.compile(r"refresh", re.I)}):
+                content = meta.get("content", "")
+                if "url=" in content.lower():
+                    cand = re.split(r'url=', content, flags=re.I)[1].strip().strip('\'"')
+                    cand_full = urllib.parse.urljoin(final_url_str, cand)
+                    if any(dom in cand_full for dom in HUBCLOUD_GATEWAY_DOMAINS):
+                        return cand_full
+
+            # Raw regex fallback for HubCloud / Gamerxyt / HubDrive
+            hub_raw = re.search(
+                r'https?://(?:[a-zA-Z0-9.-]+\.)?(?:hubcloud\.[a-z0-9-]+|hubdrive\.[a-z0-9-]+|gamerxyt\.com)/[^\s\'"<>\\]+',
+                html
+            )
+            if hub_raw:
+                return hub_raw.group(0).replace('&amp;', '&').rstrip('\\"')
+
+        # 2. Inspect HDStream4u gateways
+        elif is_hdstream4u:
+            # Check <video src="..."> and <source src="...">
+            for media_tag in soup.find_all(["video", "source"], src=True):
+                src = media_tag["src"].strip()
+                if src and not src.startswith("blob:"):
+                    return urllib.parse.urljoin(final_url_str, src).replace('&amp;', '&')
+
+            # Check JS video player configs (file: "...", source: "...", src: "...")
+            file_match = re.search(r'(?:file|source|src)\s*:\s*["\'](https?://[^"\']+\.(?:mp4|mkv)(?:\?[^"\']*)?)["\']', html, re.I)
+            if file_match:
+                return file_match.group(1).replace(r'\/', '/').replace('&amp;', '&').strip()
+
+            # Check video anchors & HubCloud anchors
+            for a in soup.find_all("a", href=True):
+                href = a["href"].strip()
+                if not href or href.startswith("#") or href.startswith("javascript:"):
+                    continue
+                full_href = urllib.parse.urljoin(final_url_str, href).replace('&amp;', '&')
+                if any(full_href.lower().endswith(ext) or ext + "?" in full_href.lower() for ext in [".mp4", ".mkv"]):
+                    return full_href
+                if any(dom in full_href for dom in HUBCLOUD_GATEWAY_DOMAINS):
+                    return full_href
+
+            # Check iframe sources
+            for iframe in soup.find_all("iframe", src=True):
+                src = iframe["src"].strip()
+                if src:
+                    full_src = urllib.parse.urljoin(final_url_str, src).replace('&amp;', '&')
+                    if any(dom in full_src for dom in HUBCLOUD_GATEWAY_DOMAINS):
+                        return full_src
+                    if any(ext in full_src.lower() for ext in [".mp4", ".mkv"]):
+                        return full_src
+
+            # Check HubCloud link in raw HTML
+            hub_raw = re.search(
+                r'https?://(?:[a-zA-Z0-9.-]+\.)?(?:hubcloud\.[a-z0-9-]+|hubdrive\.[a-z0-9-]+|gamerxyt\.com)/[^\s\'"<>\\]+',
+                html
+            )
+            if hub_raw:
+                return hub_raw.group(0).replace('&amp;', '&').rstrip('\\"')
+
+            # Check CDN links (workers.dev, r2, pixeldrain, googleusercontent)
+            cdn_match = re.search(r'https?://(?:[a-zA-Z0-9.-]+\.workers\.dev|[a-zA-Z0-9.-]+\.r2\.cloudflarestorage\.com|pixeldrain\.(?:com|dev)/(?:u|api/file)|video-downloads\.googleusercontent\.com)/[^\s\'"<>\\]+', html)
+            if cdn_match:
+                return cdn_match.group(0).replace('&amp;', '&').rstrip('\\"')
+
+            # Check direct video regex in full HTML
+            v_matches = re.findall(r'https?://[^\s\'"<>\\]+\.(?:mp4|mkv)(?:\?[^\s\'"<>\\]*)?', html, re.I)
+            for vm in v_matches:
+                clean_vm = vm.replace('&amp;', '&').rstrip('\\"')
+                if not any(junk in clean_vm.lower() for junk in ["sample", "trailer", "preview"]):
+                    return clean_vm
+
+    except Exception as e:
+        logger.warning(f"[resolve_gateway_url Error] URL: {url_str} | Error: {e}")
+    finally:
+        if close_client:
+            await client.aclose()
+
+    return url_str
 
 
 class LinkResolver:
@@ -1029,9 +1246,21 @@ class LinkResolver:
         target_host = urllib.parse.urlparse(url).netloc or "HubCloud"
         try:
             target_url = url
+            # Unpack greenmotors or hdstream4u gateway if passed directly
+            if any(k in target_url for k in ["greenmotors.club", "greenmotors.cc", "hdstream4u.com"]):
+                unpacked = await resolve_gateway_url(target_url, client=client)
+                if any(ext in unpacked.lower() for ext in [".mp4", ".mkv"]) or "workers.dev" in unpacked or "pixeldrain" in unpacked:
+                    return {
+                        "status": "SUCCESS",
+                        "host": "Direct Video Stream",
+                        "direct_url": unpacked,
+                        "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
+                    }
+                target_url = unpacked
+
             # If HubDrive, extract HubCloud button
-            if "hubdrive" in url:
-                r0 = await self.safe_fetch(client, "GET", url, headers=DEFAULT_HEADERS, timeout=HOP_TIMEOUT)
+            if "hubdrive" in target_url:
+                r0 = await self.safe_fetch(client, "GET", target_url, headers=DEFAULT_HEADERS, timeout=HOP_TIMEOUT)
                 hub_m = re.search(r'https?://hubcloud\.[a-z]+/drive/[a-zA-Z0-9_-]+', r0.text)
                 if hub_m:
                     target_url = hub_m.group(0)
@@ -1069,13 +1298,15 @@ class LinkResolver:
 
     async def _solve_olamovies_stealth(self, url: str, timeout: float = 12.0) -> Optional[str]:
         """
-        Fast automated headless Turnstile solver using patchright.
+        Fast automated headless Turnstile solver using patchright / playwright.
         Attempts to bypass Cloudflare Turnstile and extract direct CDN stream in < 12 seconds
         without requiring human desktop intervention.
         """
         if not HAS_PATCHRIGHT:
             return None
         direct_found = None
+        last_click_ref = [0.0]
+        navigated_b64 = False
         try:
             async with async_playwright() as p:
                 browser = await p.chromium.launch(
@@ -1119,17 +1350,31 @@ class LinkResolver:
                     except Exception:
                         pass
 
-                    if "Just a moment" in title or "Cloudflare" in title:
-                        for frame in page.frames:
-                            if "challenges.cloudflare.com" in frame.url:
+                    is_cf = "Just a moment" in title or "Cloudflare" in title or any(
+                        "challenges.cloudflare.com" in f.url for f in page.frames
+                    )
+
+                    if is_cf:
+                        await try_click_turnstile(page, last_click_ref)
+                    else:
+                        # Turnstile passed, check base64 redirect
+                        content = ""
+                        try:
+                            content = await page.content()
+                        except Exception:
+                            pass
+
+                        if not navigated_b64 and content:
+                            b64_target = extract_b64_redirect_url(content)
+                            if b64_target and is_safe_url(b64_target):
+                                navigated_b64 = True
                                 try:
-                                    cb = frame.locator('input[type="checkbox"], span.mark, .ctp-checkbox-label, #challenge-stage')
-                                    if await cb.count() > 0:
-                                        await cb.first.click(timeout=1000)
+                                    await page.goto(b64_target, wait_until="domcontentloaded", timeout=8000)
+                                    continue
                                 except Exception:
                                     pass
-                    else:
-                        # Turnstile passed, trigger hold/download button if present
+
+                        # Trigger hold/download button if present
                         try:
                             hold_btn = page.locator(".cc-hold-target, button:has-text('Hold'), a:has-text('Download'), a:has-text('Continue')").first
                             if await hold_btn.is_visible(timeout=800):
@@ -1143,23 +1388,23 @@ class LinkResolver:
                             pass
 
                         try:
-                            content = await page.content()
-                            r2_m = re.search(r'https?://[a-zA-Z0-9.-]+\.r2\.cloudflarestorage\.com/[^\s\'"<>\\]+', content)
-                            if r2_m:
-                                direct_found = r2_m.group(0).replace("&amp;", "&")
-                                break
-                            pd_m = re.search(r'https?://pixeldrain\.(?:com|dev)/(?:u|api/file)/([a-zA-Z0-9]+)', content)
-                            if pd_m:
-                                direct_found = f"https://pixeldrain.dev/api/file/{pd_m.group(1)}"
-                                break
-                            dl_m = re.search(r'https?://dl\.olamdrive\.com/dl\?t=[^\s\'"<>\\]+', content)
-                            if dl_m:
-                                direct_found = dl_m.group(0)
-                                break
+                            if content:
+                                r2_m = re.search(r'https?://[a-zA-Z0-9.-]+\.r2\.cloudflarestorage\.com/[^\s\'"<>\\]+', content)
+                                if r2_m:
+                                    direct_found = r2_m.group(0).replace("&amp;", "&")
+                                    break
+                                pd_m = re.search(r'https?://pixeldrain\.(?:com|dev)/(?:u|api/file)/([a-zA-Z0-9]+)', content)
+                                if pd_m:
+                                    direct_found = f"https://pixeldrain.dev/api/file/{pd_m.group(1)}"
+                                    break
+                                dl_m = re.search(r'https?://dl\.olamdrive\.com/dl\?t=[^\s\'"<>\\]+', content)
+                                if dl_m:
+                                    direct_found = dl_m.group(0)
+                                    break
                         except Exception:
                             pass
 
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(0.4)
 
                 try:
                     await browser.close()
@@ -1174,7 +1419,7 @@ class LinkResolver:
     # -------------------------------------------------------------
     # 8. OlaMovies / OMDrive / dl.olamdrive Resolver (80ms - 180ms)
     # -------------------------------------------------------------
-    async def resolve_olamovies(self, client: httpx.AsyncClient, url: str) -> dict:
+    async def resolve_olamovies(self, client: httpx.AsyncClient, url: str, allow_interactive: bool = True) -> dict:
         """Resolve OlaMovies / OMDrive link with dynamic Cloudflare stealth solver and adaptive wait."""
         t0 = time.perf_counter()
         if not url:
@@ -1194,8 +1439,21 @@ class LinkResolver:
                 }
 
             if "drive.olamovies" in url:
-                r1 = await self.safe_fetch(client, "GET", url, headers=DEFAULT_HEADERS, timeout=HOP_TIMEOUT)
-                dl_match = re.search(r'https?://dl\.olamdrive\.com/dl\?t=[^\s\'"<>\\]+', r1.text)
+                text_content = ""
+                if HAS_CURL_CFFI:
+                    try:
+                        def _curl_drive():
+                            s = stealth_requests.Session(impersonate="chrome120")
+                            r_d = s.get(url, headers={"Referer": "https://v4.olamovies.mov/", **DEFAULT_HEADERS}, timeout=HOP_TIMEOUT)
+                            return r_d.text
+                        text_content = await asyncio.to_thread(_curl_drive)
+                    except Exception:
+                        pass
+                if not text_content:
+                    r1 = await self.safe_fetch(client, "GET", url, headers=DEFAULT_HEADERS, timeout=HOP_TIMEOUT)
+                    text_content = r1.text
+
+                dl_match = re.search(r'https?://dl\.olamdrive\.com/dl\?t=[^\s\'"<>\\]+', text_content)
                 if dl_match:
                     direct = dl_match.group(0)
                     if is_safe_url(direct):
@@ -1218,7 +1476,42 @@ class LinkResolver:
                     }
 
             if "tpi.li" in url or "links.olamovies" in url or "links.ol-am" in url:
-                # 3. Attempt automated headless stealth solve first (< 10 seconds)
+                # 3. Strategy 1: Check vault cookies with curl_cffi (Chrome 120 TLS fingerprint)
+                cookies = self.auth_bridge.get_provider_cookies("olamovies")
+                if not cookies:
+                    cookie_file = os.path.join(os.path.dirname(__file__), "olamovies_session_cookies.json")
+                    if os.path.exists(cookie_file):
+                        try:
+                            with open(cookie_file, "r", encoding="utf-8") as cf:
+                                cookies = json.load(cf)
+                        except Exception:
+                            pass
+
+                if HAS_CURL_CFFI and cookies and is_safe_url(url):
+                    try:
+                        def _curl_with_vault():
+                            s = stealth_requests.Session(impersonate="chrome120")
+                            for ck in cookies:
+                                ck_domain = ck.get("domain", "")
+                                if any(d in ck_domain for d in ["olamovies", "paybase", "ol-am", "cloudflare"]):
+                                    s.cookies.set(ck["name"], ck["value"], domain=ck_domain if ck_domain.startswith(".") else f".{target_host}")
+                            r_c = s.get(url, headers={"Referer": "https://v4.olamovies.mov/", **DEFAULT_HEADERS}, timeout=HOP_TIMEOUT)
+                            if r_c.status_code == 200 and "Just a moment" not in r_c.text and "Cloudflare" not in r_c.text:
+                                return r_c.text
+                            return None
+                        vault_html = await asyncio.to_thread(_curl_with_vault)
+                        if vault_html:
+                            dec = extract_b64_redirect_url(vault_html)
+                            if dec and is_safe_url(dec):
+                                res = await self.resolve_olamovies(client, dec, allow_interactive=False)
+                                if res.get("status") == "SUCCESS" and res.get("direct_url"):
+                                    if hasattr(self.auth_bridge, "_resolved_streams"):
+                                        self.auth_bridge._resolved_streams[url] = res["direct_url"]
+                                    return res
+                    except Exception:
+                        pass
+
+                # 4. Strategy 2: Attempt automated headless stealth solve (< 10 seconds)
                 stealth_stream = await self._solve_olamovies_stealth(url, timeout=10.0)
                 if stealth_stream and is_safe_url(stealth_stream):
                     logger.info(f"[OlaMovies Stealth Hit] Resolved direct stream: {stealth_stream[:80]}")
@@ -1231,84 +1524,62 @@ class LinkResolver:
                         "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
                     }
 
-                # 4. Load session cookies from auth vault if available
-                cookies = self.auth_bridge.get_provider_cookies("olamovies")
-                if not cookies:
-                    cookie_file = os.path.join(os.path.dirname(__file__), "olamovies_session_cookies.json")
-                    if os.path.exists(cookie_file):
-                        try:
-                            with open(cookie_file, "r", encoding="utf-8") as cf:
-                                cookies = json.load(cf)
-                        except Exception:
-                            pass
+                # 5. Strategy 3: Interactive persistent solver bridge with automated Turnstile clicker
+                if not allow_interactive:
+                    return {
+                        "status": "CLOUDFLARE_PROTECTED",
+                        "host": "OlaMovies Protected",
+                        "direct_url": url,
+                        "error": "Cloudflare Turnstile Active",
+                        "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
+                    }
 
-                if cookies:
-                    for ck in cookies:
-                        ck_domain = ck.get("domain", "")
-                        if any(d in ck_domain for d in ["olamovies", "paybase", "ol-am", "cloudflare"]):
-                            client.cookies.set(ck["name"], ck["value"], domain=ck_domain if ck_domain.startswith(".") else f".{target_host}")
-
-                try:
-                    r1 = await self.safe_fetch(client, "GET", url, headers={"Referer": "https://v4.olamovies.mov/", **DEFAULT_HEADERS}, timeout=HOP_TIMEOUT)
-                    if r1.status_code == 403 or "Just a moment" in r1.text or "Cloudflare" in r1.text:
-                        auth_res = await self.auth_bridge.trigger_interactive_login("olamovies", target_url=url, timeout=60.0)
-                        if auth_res.get("status") == "SUCCESS":
-                            if auth_res.get("direct_url") and is_safe_url(auth_res["direct_url"]):
-                                return {
-                                    "status": "SUCCESS",
-                                    "host": "OlaMovies Direct Stream",
-                                    "direct_url": auth_res["direct_url"],
-                                    "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
-                                }
-                            if hasattr(self.auth_bridge, "get_resolved_stream"):
-                                cached = self.auth_bridge.get_resolved_stream(url)
-                                if cached and is_safe_url(cached):
-                                    return {
-                                        "status": "SUCCESS",
-                                        "host": "OlaMovies Direct Stream",
-                                        "direct_url": cached,
-                                        "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
-                                    }
+                auth_res = await self.auth_bridge.trigger_interactive_login("olamovies", target_url=url, timeout=60.0)
+                if auth_res.get("status") == "SUCCESS":
+                    if auth_res.get("direct_url") and is_safe_url(auth_res["direct_url"]):
                         return {
-                            "status": "CLOUDFLARE_PROTECTED",
-                            "host": "OlaMovies Protected",
-                            "direct_url": url,
-                            "error": "Cloudflare Turnstile Active",
+                            "status": "SUCCESS",
+                            "host": "OlaMovies Direct Stream",
+                            "direct_url": auth_res["direct_url"],
                             "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
                         }
-                    b64_matches = re.findall(r'value=[\'"]([a-zA-Z0-9+/=]{40,})[\'"]', r1.text)
-                    for b64 in b64_matches:
+                    if hasattr(self.auth_bridge, "get_resolved_stream"):
+                        cached = self.auth_bridge.get_resolved_stream(url)
+                        if cached and is_safe_url(cached):
+                            return {
+                                "status": "SUCCESS",
+                                "host": "OlaMovies Direct Stream",
+                                "direct_url": cached,
+                                "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
+                            }
+
+                    # If cookies were refreshed, retry with curl_cffi (Chrome 120)
+                    fresh_cookies = self.auth_bridge.get_provider_cookies("olamovies")
+                    if HAS_CURL_CFFI and fresh_cookies:
                         try:
-                            decoded = base64.b64decode(b64).decode('utf-8')
-                            if "http" in decoded and ("drive.olamovies" in decoded or "dl.olamdrive" in decoded) and is_safe_url(decoded):
-                                return await self.resolve_olamovies(client, decoded)
+                            def _curl_fresh():
+                                s = stealth_requests.Session(impersonate="chrome120")
+                                for ck in fresh_cookies:
+                                    ck_domain = ck.get("domain", "")
+                                    if any(d in ck_domain for d in ["olamovies", "paybase", "ol-am", "cloudflare"]):
+                                        s.cookies.set(ck["name"], ck["value"], domain=ck_domain if ck_domain.startswith(".") else f".{target_host}")
+                                r_c = s.get(url, headers={"Referer": "https://v4.olamovies.mov/", **DEFAULT_HEADERS}, timeout=HOP_TIMEOUT)
+                                return r_c.text if r_c.status_code == 200 else None
+                            fresh_html = await asyncio.to_thread(_curl_fresh)
+                            if fresh_html:
+                                dec = extract_b64_redirect_url(fresh_html)
+                                if dec and is_safe_url(dec):
+                                    return await self.resolve_olamovies(client, dec, allow_interactive=False)
                         except Exception:
                             pass
-                except Exception:
-                    pass
 
-                # If curl_cffi is available, try stealth TLS impersonation without subprocess
-                if HAS_CURL_CFFI and is_safe_url(url):
-                    try:
-                        def _curl_olam():
-                            s = stealth_requests.Session(impersonate="chrome120")
-                            r_c = s.get(url, headers={"Referer": "https://v4.olamovies.mov/", **DEFAULT_HEADERS}, timeout=HOP_TIMEOUT)
-                            if r_c.status_code == 403:
-                                return None
-                            b64_m = re.findall(r'value=[\'"]([a-zA-Z0-9+/=]{40,})[\'"]', r_c.text)
-                            for b64 in b64_m:
-                                try:
-                                    dec = base64.b64decode(b64).decode('utf-8')
-                                    if "http" in dec and ("drive.olamovies" in dec or "dl.olamdrive" in dec) and is_safe_url(dec):
-                                        return dec
-                                except Exception:
-                                    pass
-                            return None
-                        dec_url = await asyncio.to_thread(_curl_olam)
-                        if dec_url and is_safe_url(dec_url):
-                            return await self.resolve_olamovies(client, dec_url)
-                    except Exception:
-                        pass
+                return {
+                    "status": "CLOUDFLARE_FAILED",
+                    "host": "OlaMovies Protected",
+                    "direct_url": url,
+                    "error": auth_res.get("error", "Cloudflare challenge was not resolved"),
+                    "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
+                }
 
         except Exception as e:
             elapsed = round((time.perf_counter() - t0) * 1000, 2)
@@ -1322,7 +1593,7 @@ class LinkResolver:
     # -------------------------------------------------------------
     # 9. Auto Dispatcher Router (Resilient, Multi-Option Race)
     # -------------------------------------------------------------
-    async def resolve_auto(self, url: str) -> dict:
+    async def resolve_auto(self, url: str, allow_interactive: bool = True) -> dict:
         """
         Automatically route incoming URL to dedicated pure async multi-option resolver.
         Guarantees zero crashes on malformed URLs, timeouts, or dead links.
@@ -1426,16 +1697,40 @@ class LinkResolver:
                 "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
             }
 
+        # Direct Media Stream Short-Circuit (< 0.1ms): Never fetch 25GB+ binary media files as HTML
+        if any(ext in url_str.lower() for ext in [".mkv", ".mp4", ".m3u8", ".webm", ".ts"]) or "r2.cloudflarestorage.com" in url_str:
+            return {
+                "status": "SUCCESS",
+                "host": "Direct Media Stream",
+                "direct_url": url_str,
+                "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
+            }
+
         try:
             async with httpx.AsyncClient(http2=True, limits=self.limits, follow_redirects=False) as client:
-                if any(k in url_str for k in ["driveseed", "unblockedgames", "thenaukriadda", "video-seed", "video-gen", "sid=", "lp_go"]):
+                if any(k in url_str for k in ["greenmotors.club", "greenmotors.cc", "hdstream4u.com"]):
+                    unpacked_url = await resolve_gateway_url(url_str, client=client)
+                    if any(k in unpacked_url for k in ["hubcloud", "gamerxyt", "gyanigurus", "hubdrive"]):
+                        res = await self.resolve_hubcloud_gamerxyt(client, unpacked_url)
+                    elif any(ext in unpacked_url.lower() for ext in [".mp4", ".mkv"]) or "workers.dev" in unpacked_url or "pixeldrain" in unpacked_url:
+                        res = {
+                            "status": "SUCCESS",
+                            "host": "Direct Video Stream",
+                            "direct_url": unpacked_url,
+                            "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
+                        }
+                    elif unpacked_url != url_str:
+                        res = await self.resolve_auto(unpacked_url, allow_interactive=allow_interactive)
+                    else:
+                        res = await self.resolve_hubcloud_gamerxyt(client, url_str)
+                elif any(k in url_str for k in ["driveseed", "unblockedgames", "thenaukriadda", "video-seed", "video-gen", "sid=", "lp_go"]):
                     res = await self.resolve_driveseed_multi(client, url_str)
                 elif "vcloud" in url_str or "nexdrive" in url_str or "fast-dl" in url_str:
                     res = await self.resolve_vcloud(client, url_str)
                 elif "hubcloud" in url_str or "gamerxyt" in url_str or "gyanigurus" in url_str or "hubdrive" in url_str:
                     res = await self.resolve_hubcloud_gamerxyt(client, url_str)
                 elif "olamovies" in url_str or "olamdrive" in url_str or "ol-am" in url_str or "tpi.li" in url_str:
-                    res = await self.resolve_olamovies(client, url_str)
+                    res = await self.resolve_olamovies(client, url_str, allow_interactive=allow_interactive)
                 else:
                     # General landing page dynamic inspection
                     candidates = await self.harvest_all_options(client, url_str)
@@ -1469,7 +1764,7 @@ class LinkResolver:
                         if page_r and page_r.status_code == 200:
                             hop_res = await JevStreamResolver.resolve_gateway_hop(page_r.text, current_url=url_str)
                             if hop_res.get("status") == "SUCCESS" and hop_res.get("direct_url") and hop_res["direct_url"] != url_str:
-                                resolved_hop = await self.resolve_auto(hop_res["direct_url"])
+                                resolved_hop = await self.resolve_auto(hop_res["direct_url"], allow_interactive=allow_interactive)
                                 if resolved_hop.get("status") == "SUCCESS" and resolved_hop.get("direct_url"):
                                     res = resolved_hop
                     except Exception:
@@ -1490,6 +1785,62 @@ class LinkResolver:
                 "error": str(e),
                 "elapsed_ms": elapsed
             }
+
+    async def resolve_gateway_url(self, url: str, client: Optional[httpx.AsyncClient] = None) -> str:
+        """Instance method wrapper for resolve_gateway_url."""
+        return await resolve_gateway_url(url, client=client)
+
+    async def resolve_stream_url(self, url: str, client: Optional[httpx.AsyncClient] = None, allow_interactive: bool = True) -> dict:
+        """
+        Direct stream URL resolver entrypoint.
+        Checks if url contains greenmotors.club, greenmotors.cc, or hdstream4u.com,
+        unpacks via resolve_gateway_url(), and routes to resolve_hubcloud_gamerxyt().
+        """
+        t0 = time.perf_counter()
+        if not url or not str(url).strip():
+            return {
+                "status": "FAILED",
+                "host": "Unknown",
+                "direct_url": "",
+                "error": "Empty URL provided",
+                "elapsed_ms": 0.0
+            }
+
+        url_str = str(url).strip()
+        if any(k in url_str for k in ["greenmotors.club", "greenmotors.cc", "hdstream4u.com"]):
+            unpacked_url = await resolve_gateway_url(url_str, client=client)
+            if any(k in unpacked_url for k in ["hubcloud", "gamerxyt", "gyanigurus", "hubdrive"]):
+                if client is not None:
+                    return await self.resolve_hubcloud_gamerxyt(client, unpacked_url)
+                else:
+                    async with httpx.AsyncClient(http2=True, limits=self.limits, follow_redirects=False) as c:
+                        return await self.resolve_hubcloud_gamerxyt(c, unpacked_url)
+            elif any(ext in unpacked_url.lower() for ext in [".mp4", ".mkv"]) or "workers.dev" in unpacked_url or "pixeldrain" in unpacked_url:
+                return {
+                    "status": "SUCCESS",
+                    "host": "Direct Video Stream",
+                    "direct_url": unpacked_url,
+                    "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
+                }
+            elif unpacked_url != url_str:
+                return await self.resolve_auto(unpacked_url, allow_interactive=allow_interactive)
+            else:
+                if client is not None:
+                    return await self.resolve_hubcloud_gamerxyt(client, url_str)
+                else:
+                    async with httpx.AsyncClient(http2=True, limits=self.limits, follow_redirects=False) as c:
+                        return await self.resolve_hubcloud_gamerxyt(c, url_str)
+
+        return await self.resolve_auto(url_str, allow_interactive=allow_interactive)
+
+
+async def resolve_stream_url(url: str, client: Optional[httpx.AsyncClient] = None, allow_interactive: bool = True) -> dict:
+    """
+    Module-level stream URL resolver entrypoint.
+    Unpacks gateways (greenmotors.club, greenmotors.cc, hdstream4u.com) before resolving.
+    """
+    resolver = LinkResolver()
+    return await resolver.resolve_stream_url(url, client=client, allow_interactive=allow_interactive)
 
 
 if __name__ == "__main__":

@@ -1,36 +1,43 @@
 {
   "uhdmovies": {
-    "active_mirror": "https://uhdmovies.my",
+    "active_mirror": "https://uhdmovies.us.org",
     "latency_ms": 0.0,
-    "last_success": 1790843908.0354524,
+    "last_success": 1792384428.9209776,
     "consecutive_failures": 0,
     "status": "healthy"
   },
   "hdhub4u": {
-    "active_mirror": "https://new1.hdhub4u.free",
+    "active_mirror": "https://new8.hdhub4u.cl",
     "latency_ms": 0.0,
-    "last_success": 1790843908.1957345,
+    "last_success": 1792384429.9362032,
     "consecutive_failures": 0,
     "status": "healthy"
   },
   "vegamovies": {
-    "active_mirror": "https://vegamovies.gallery",
+    "active_mirror": "https://new1.vegamovies.lease",
     "latency_ms": 0.0,
-    "last_success": 1790843908.7714918,
+    "last_success": 1792384430.4023418,
     "consecutive_failures": 0,
     "status": "healthy"
   },
   "olamovies": {
     "active_mirror": "https://v6.olamovies.mov",
     "latency_ms": 0.0,
-    "last_success": 1790843908.8740127,
+    "last_success": 1792384428.1318526,
     "consecutive_failures": 0,
     "status": "healthy"
   },
   "desiremovies": {
-    "active_mirror": "https://1desiremovies.rodeo",
-    "latency_ms": 1320.17,
-    "last_success": 1790840348.3731382,
+    "active_mirror": "https://1desiremovies.eu",
+    "latency_ms": 1290.91,
+    "last_success": 1792380553.7012012,
+    "consecutive_failures": 0,
+    "status": "healthy"
+  },
+  "4khdhub": {
+    "active_mirror": "https://4khdhub.one",
+    "latency_ms": 1020.81,
+    "last_success": 1792380553.457539,
     "consecutive_failures": 0,
     "status": "healthy"
   }

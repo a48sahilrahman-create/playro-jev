@@ -3098,9 +3098,11 @@
             }
 
             // Stream Verification Lock: Refuse to launch raw gateway URLs into VLC
+            // Note: Internal proxy URLs (/playback/resolve) are auto-unwrapped and resolved by backend /api/vlc/play
+            const isInternalProxy = target.includes('/playback/resolve');
             const isGateway = /greenmotors|hdstream4u|driveseed|unblockedgames|thenaukriadda|video-seed|video-gen|homelander/i.test(target);
             const isDirectMedia = /\.mkv|\.mp4|\.m3u8|\.webm|r2\.cloudflarestorage|pixeldrain|workers\.dev/i.test(target);
-            if (isGateway && !isDirectMedia) {
+            if (!isInternalProxy && isGateway && !isDirectMedia) {
                 showToast(`⚠️ Stream Verification Lock: Gateway URL must be resolved to direct media before launching VLC.`, 5000);
                 return;
             }

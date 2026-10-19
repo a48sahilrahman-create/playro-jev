@@ -1,0 +1,144 @@
+[
+  {
+    "id": "com.linvo.cinemeta",
+    "name": "Cinemeta",
+    "version": "3.0.12",
+    "description": "Official Cinemeta Catalog for Movies and TV Series",
+    "icon": "https://v3-cinemeta.strem.io/logo.png",
+    "background": "",
+    "manifest_url": "https://v3-cinemeta.strem.io/manifest.json",
+    "transport_url": "https://v3-cinemeta.strem.io",
+    "enabled": true,
+    "is_default": true,
+    "types": [
+      "movie",
+      "series"
+    ],
+    "catalogs": [
+      {
+        "id": "top",
+        "type": "movie",
+        "name": "Popular",
+        "extra": [
+          {
+            "name": "genre"
+          },
+          {
+            "name": "search"
+          },
+          {
+            "name": "skip"
+          }
+        ]
+      },
+      {
+        "id": "top",
+        "type": "series",
+        "name": "Popular",
+        "extra": [
+          {
+            "name": "genre"
+          },
+          {
+            "name": "search"
+          },
+          {
+            "name": "skip"
+          }
+        ]
+      }
+    ],
+    "resources": [
+      "catalog",
+      "meta"
+    ]
+  },
+  {
+    "id": "tmdb-addon",
+    "name": "The Movie Database Addon",
+    "version": "0.0.10",
+    "description": "The Movie Database (TMDB) catalog and metadata addon",
+    "icon": "https://94c8cb9f702d-tmdb-addon.baby-beamup.club/logo.png",
+    "background": "",
+    "manifest_url": "https://94c8cb9f702d-tmdb-addon.baby-beamup.club/manifest.json",
+    "transport_url": "https://94c8cb9f702d-tmdb-addon.baby-beamup.club",
+    "enabled": true,
+    "is_default": true,
+    "types": [
+      "movie",
+      "series"
+    ],
+    "catalogs": [
+      {
+        "id": "tmdb.search",
+        "type": "movie",
+        "name": "Search",
+        "extra": [
+          {
+            "name": "search",
+            "isRequired": true,
+            "options": []
+          }
+        ]
+      },
+      {
+        "id": "tmdb.search",
+        "type": "series",
+        "name": "Search",
+        "extra": [
+          {
+            "name": "search",
+            "isRequired": true,
+            "options": []
+          }
+        ]
+      }
+    ],
+    "resources": [
+      "catalog",
+      "meta"
+    ]
+  },
+  {
+    "id": "org.cyberflix.service",
+    "name": "CyberFlix Catalog",
+    "version": "1.4.1",
+    "description": "CyberFlix Catalog for Stremio",
+    "icon": "https://cyberflix.elfhosted.com/logo.png",
+    "background": "",
+    "manifest_url": "https://cyberflix.elfhosted.com/c/catalogs/manifest.json",
+    "transport_url": "https://cyberflix.elfhosted.com/c/catalogs",
+    "enabled": true,
+    "is_default": true,
+    "types": [
+      "movie",
+      "series"
+    ],
+    "catalogs": [
+      {
+        "id": "cyberflix_movies",
+        "type": "movie",
+        "name": "CyberFlix Movies",
+        "extra": [
+          {
+            "name": "search"
+          }
+        ]
+      },
+      {
+        "id": "cyberflix_series",
+        "type": "series",
+        "name": "CyberFlix Series",
+        "extra": [
+          {
+            "name": "search"
+          }
+        ]
+      }
+    ],
+    "resources": [
+      "catalog",
+      "meta"
+    ]
+  }
+]

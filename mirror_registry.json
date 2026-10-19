@@ -33,8 +33,9 @@
   "vegamovies": {
     "type": "edge_refresh",
     "edge_endpoint": "https://vglist.lol/?re=vegamovies",
-    "fallback": "https://vegamovies.gallery",
+    "fallback": "https://new1.vegamovies.lease",
     "candidates": [
+      "https://new1.vegamovies.lease",
       "https://vegamovies.gallery",
       "https://new2.vegamovies.futbol",
       "https://vegamovies.mov"
@@ -69,5 +70,14 @@
       "https://1desiremovies.cymru"
     ],
     "fallback": "https://1desiremovies.rodeo"
+  },
+  "4khdhub": {
+    "type": "redirect_or_probe",
+    "fallback": "https://4khdhub.one",
+    "candidates": [
+      "https://4khdhub.one",
+      "https://4khdhub.cloud"
+    ],
+    "search_dork": "4khdhub official website"
   }
 }

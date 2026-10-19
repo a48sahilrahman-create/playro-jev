@@ -59,8 +59,9 @@ EMBEDDED_REGISTRY = {
     "vegamovies": {
         "type": "edge_refresh",
         "edge_endpoint": "https://vglist.lol/?re=vegamovies",
-        "fallback": "https://vegamovies.gallery",
+        "fallback": "https://new1.vegamovies.lease",
         "candidates": [
+            "https://new1.vegamovies.lease",
             "https://vegamovies.gallery",
             "https://new2.vegamovies.futbol",
             "https://1vegamovies.lat",
@@ -357,6 +358,19 @@ class DomainResolver:
                                     pass
                             else:
                                 return probe_res
+
+                # Intermediate trampoline hop for VegaMovies landing domain (e.g. 1vegamovies.baby -> /?re=vg&t=2 -> new1.vegamovies.lease)
+                if brand == "vegamovies":
+                    try:
+                        trampoline_url = f"{str(r.url).rstrip('/')}/?re=vg&t=2"
+                        tr_resp = await client.get(trampoline_url, headers=DEFAULT_HEADERS, timeout=3.0, follow_redirects=True)
+                        if tr_resp.status_code == 200:
+                            cand_url = str(tr_resp.url).rstrip('/')
+                            chk = await client.get(f"{cand_url}/ts-search.php?q=test", headers=DEFAULT_HEADERS, timeout=2.0)
+                            if chk.status_code == 200:
+                                return cand_url
+                    except Exception as ex:
+                        logger.debug(f"VegaMovies trampoline probe error: {ex}")
         except Exception as e:
             logger.debug(f"Edge refresh resolution error for {brand}: {e}")
 

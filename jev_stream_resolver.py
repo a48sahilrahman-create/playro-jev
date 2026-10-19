@@ -384,7 +384,10 @@ class JevStreamResolver:
             r'https?://(?:vcloud\.[a-z]+|nexdrive\.[a-z]+|fast-dl\.[a-z]+|v-cloud\.[a-z]+)/[^\s\'"<>\\]+',
             r'https?://pixeldrain\.(?:com|dev)/(?:u|api/file)/[a-zA-Z0-9]+',
             r'https?://[a-zA-Z0-9.-]+\.workers\.dev/[^\s\'"<>\\]+',
-            r'https?://[a-zA-Z0-9.-]+\.r2\.cloudflarestorage\.com/[^\s\'"<>\\]+'
+            r'https?://[a-zA-Z0-9.-]+\.r2\.cloudflarestorage\.com/[^\s\'"<>\\]+',
+            r'https?://links\.(?:ol-am|olamovies)\.[a-z]+/[^\s\'"<>\\]+',
+            r'https?://drive\.olamovies\.[a-z]+/[^\s\'"<>\\]+',
+            r'https?://dl\.olamdrive\.com/dl\?[^\s\'"<>\\]+'
         ]
         candidates = []
         for pat in patterns:
@@ -406,8 +409,14 @@ class JevStreamResolver:
         if candidates:
             extracted = candidates[0]
 
+        link_type = "direct_stream"
+        if "driveseed" in extracted:
+            link_type = "driveseed_gateway"
+        elif any(k in extracted for k in ["links.ol-am", "links.olamovies", "drive.olamovies"]):
+            link_type = "olamovies_gateway"
+
         return {
-            "link_type": "driveseed_gateway" if "driveseed" in extracted else "direct_stream",
+            "link_type": link_type,
             "resolution": resolution,
             "has_dual_audio": has_dual,
             "extracted_url": extracted
@@ -420,12 +429,18 @@ class JevStreamResolver:
         action = "click_real_button"
         target = ""
 
-        atob_m = re.search(r"atob\(atob\(['\"]([a-zA-Z0-9+/=]{10,})['\"]\)\)", html)
-        if atob_m:
-            action = "decode_atob"
-            target = atob_m.group(1)
-        elif "<form" in html.lower() and "post" in html.lower():
-            action = "submit_form_post"
+        # Check for base64 encoded input / redirect targets (OlaMovies style)
+        b64_m = re.search(r'value=[\'"]([a-zA-Z0-9+/=_-]{30,})[\'"]', html)
+        if b64_m:
+            action = "decode_b64"
+            target = b64_m.group(1)
+        else:
+            atob_m = re.search(r"atob\(atob\(['\"]([a-zA-Z0-9+/=]{10,})['\"]\)\)", html)
+            if atob_m:
+                action = "decode_atob"
+                target = atob_m.group(1)
+            elif "<form" in html.lower() and "post" in html.lower():
+                action = "submit_form_post"
 
         return {
             "hop_action": action,

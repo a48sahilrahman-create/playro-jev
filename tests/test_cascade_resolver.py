@@ -284,10 +284,10 @@ async def test_parallel_cascade_election_fastest_responder_and_waterfall_orderin
         all_stream_urls = [res["primary"]["direct_url"]] + [w["direct_url"] for w in res["waterfall"]]
         assert "https://quota.cdn/blocked.mkv" not in all_stream_urls
 
-        # Embed fallback is attached with 5 providers
+        # Embed fallback is attached with commercial providers
         assert "embed_fallback" in res
         assert "all_providers" in res["embed_fallback"]
-        assert len(res["embed_fallback"]["all_providers"]) == 5
+        assert len(res["embed_fallback"]["all_providers"]) == 7
         assert "tt1375666" in res["embed_fallback"]["embed_url"]
 
 
@@ -325,9 +325,9 @@ async def test_cascade_all_fail_or_quota_returns_fallback():
         assert res["primary"] is None
         assert res["waterfall"] == []
         assert "embed_fallback" in res
-        assert res["embed_fallback"]["provider"] == "filmu"
+        assert res["embed_fallback"]["provider"] == "autoembed"
         assert "tt0137523" in res["embed_fallback"]["embed_url"]
-        assert len(res["embed_fallback"]["all_providers"]) == 5
+        assert len(res["embed_fallback"]["all_providers"]) == 7
 
 
 @pytest.mark.asyncio

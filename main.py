@@ -2080,11 +2080,11 @@ async def api_embed_sources(
     season: Optional[int] = None,
     episode: Optional[int] = None,
     year: Optional[str] = None,
-    preferred: Optional[str] = "filmu",
+    preferred: Optional[str] = "autoembed",
     start_time: Optional[float] = None
 ):
     """
-    Multi-provider embed streaming source generator (Filmu, Cinezo, Vidbolt, Vidy, Vidrift).
+    Multi-provider embed streaming source generator (AutoEmbed, VidSrc, VidSrcMe, 2Embed, Filmu, Cinezo, Vidrift).
     Accepts title, imdb_id, season, episode, year (or id, type, preferred, start_time).
     Returns all 5 provider embed URLs.
     """

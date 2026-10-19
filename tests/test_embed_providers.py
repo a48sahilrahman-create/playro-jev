@@ -18,42 +18,46 @@ class TestEmbedEngine:
     """Tests for EmbedEngine functionality."""
 
     def test_providers_list(self):
-        """Verify all 5 required providers are defined in the exact order/names."""
-        assert EmbedEngine.PROVIDERS == ["filmu", "cinezo", "vidbolt", "vidy", "vidrift"]
+        """Verify all required providers are defined in the exact order/names."""
+        assert EmbedEngine.PROVIDERS == ["autoembed", "vidsrc", "vidsrcme", "twoembed", "filmu", "cinezo", "vidrift"]
 
-    def test_movie_url_generation_all_5_providers(self):
-        """Test Movie URL generation for all 5 commercial providers with tt0137523 (Fight Club)."""
+    def test_movie_url_generation_all_providers(self):
+        """Test Movie URL generation for commercial providers with tt0137523 (Fight Club)."""
         item_id = "tt0137523"
         urls = EmbedEngine.get_embed_urls("movie", item_id)
 
-        assert len(urls) == 5
+        assert len(urls) == 7
+        assert urls["autoembed"] == "https://autoembed.co/movie/imdb/tt0137523"
+        assert urls["vidsrc"] == "https://vidsrc.pm/embed/movie/tt0137523"
+        assert urls["vidsrcme"] == "https://vidsrc.me/embed/movie?imdb=tt0137523"
+        assert urls["twoembed"] == "https://www.2embed.cc/embed/tt0137523"
         assert urls["filmu"] == "https://embed.filmu.in/movie/tt0137523"
         assert urls["cinezo"] == "https://cinezo.net/embed/movie/tt0137523"
-        assert urls["vidbolt"] == "https://vidbolt.org/embed/movie/tt0137523"
-        assert urls["vidy"] == "https://vidsrc.pm/embed/movie/tt0137523"
         assert urls["vidrift"] == "https://vidrift.com/embed/movie/tt0137523"
 
-    def test_tv_episode_url_generation_all_5_providers(self):
-        """Test TV Episode URL generation for all 5 commercial providers with tt0944947 (Game of Thrones), S01E01."""
+    def test_tv_episode_url_generation_all_providers(self):
+        """Test TV Episode URL generation for commercial providers with tt0944947 (Game of Thrones), S01E01."""
         item_id = "tt0944947"
         urls = EmbedEngine.get_embed_urls("tv", item_id, season=1, episode=1)
 
-        assert len(urls) == 5
+        assert len(urls) == 7
+        assert urls["autoembed"] == "https://autoembed.co/tv/imdb/tt0944947-1-1"
+        assert urls["vidsrc"] == "https://vidsrc.pm/embed/tv/tt0944947/1/1"
+        assert urls["vidsrcme"] == "https://vidsrc.me/embed/tv?imdb=tt0944947&season=1&episode=1"
+        assert urls["twoembed"] == "https://www.2embed.cc/embedtv/tt0944947&s=1&e=1"
         assert urls["filmu"] == "https://embed.filmu.in/tv/tt0944947/1/1"
         assert urls["cinezo"] == "https://cinezo.net/embed/tv/tt0944947/1/1"
-        assert urls["vidbolt"] == "https://vidbolt.org/embed/tv/tt0944947/1/1"
-        assert urls["vidy"] == "https://vidsrc.pm/embed/tv/tt0944947/1/1"
         assert urls["vidrift"] == "https://vidrift.com/embed/tv/tt0944947/1/1"
 
     def test_named_keyword_signature_movie_and_tv(self):
         """Test get_embed_urls with title, year, season, episode, imdb_id keyword parameters."""
         # Movie
         movie_urls = EmbedEngine.get_embed_urls(title="Inception", year="2010", imdb_id="tt1375666")
-        assert len(movie_urls) == 5
+        assert len(movie_urls) == 7
+        assert movie_urls["autoembed"] == "https://autoembed.co/movie/imdb/tt1375666"
+        assert movie_urls["vidsrc"] == "https://vidsrc.pm/embed/movie/tt1375666"
         assert movie_urls["filmu"] == "https://embed.filmu.in/movie/tt1375666"
         assert movie_urls["cinezo"] == "https://cinezo.net/embed/movie/tt1375666"
-        assert movie_urls["vidbolt"] == "https://vidbolt.org/embed/movie/tt1375666"
-        assert movie_urls["vidy"] == "https://vidsrc.pm/embed/movie/tt1375666"
         assert movie_urls["vidrift"] == "https://vidrift.com/embed/movie/tt1375666"
 
         # TV Episode
@@ -63,18 +67,19 @@ class TestEmbedEngine:
             episode=14,
             imdb_id="tt0903747"
         )
-        assert len(tv_urls) == 5
+        assert len(tv_urls) == 7
+        assert tv_urls["autoembed"] == "https://autoembed.co/tv/imdb/tt0903747-5-14"
+        assert tv_urls["vidsrc"] == "https://vidsrc.pm/embed/tv/tt0903747/5/14"
         assert tv_urls["filmu"] == "https://embed.filmu.in/tv/tt0903747/5/14"
         assert tv_urls["cinezo"] == "https://cinezo.net/embed/tv/tt0903747/5/14"
-        assert tv_urls["vidbolt"] == "https://vidbolt.org/embed/tv/tt0903747/5/14"
-        assert tv_urls["vidy"] == "https://vidsrc.pm/embed/tv/tt0903747/5/14"
         assert tv_urls["vidrift"] == "https://vidrift.com/embed/tv/tt0903747/5/14"
 
     def test_tv_series_type_alias_series(self):
         """Verify 'series' media_type functions identically to 'tv'."""
         urls = EmbedEngine.get_embed_urls("series", "tt0944947", season=2, episode=5)
+        assert urls["autoembed"] == "https://autoembed.co/tv/imdb/tt0944947-2-5"
+        assert urls["vidsrc"] == "https://vidsrc.pm/embed/tv/tt0944947/2/5"
         assert urls["filmu"] == "https://embed.filmu.in/tv/tt0944947/2/5"
-        assert urls["vidy"] == "https://vidsrc.pm/embed/tv/tt0944947/2/5"
 
     def test_id_normalization_whitespace(self):
         """Test ID normalization strips leading and trailing spaces."""
@@ -102,13 +107,13 @@ class TestEmbedEngine:
         assert EmbedEngine.normalize_id(None) == ""
 
     def test_preferred_embed_default(self):
-        """Test preferred embed defaults to filmu."""
+        """Test preferred embed defaults to autoembed."""
         result = EmbedEngine.get_preferred_embed("movie", "tt0137523")
-        assert result["provider"] == "filmu"
-        assert result["embed_url"] == "https://embed.filmu.in/movie/tt0137523"
+        assert result["provider"] == "autoembed"
+        assert result["embed_url"] == "https://autoembed.co/movie/imdb/tt0137523"
         assert "all_providers" in result
-        assert len(result["all_providers"]) == 5
-        assert result["all_providers"]["filmu"] == "https://embed.filmu.in/movie/tt0137523"
+        assert len(result["all_providers"]) == 7
+        assert result["all_providers"]["autoembed"] == "https://autoembed.co/movie/imdb/tt0137523"
 
     def test_preferred_embed_selection(self):
         """Test preferred embed selection for explicit providers."""
@@ -116,45 +121,42 @@ class TestEmbedEngine:
         assert res_cinezo["provider"] == "cinezo"
         assert res_cinezo["embed_url"] == "https://cinezo.net/embed/movie/tt0137523"
 
-        res_vidbolt = EmbedEngine.get_preferred_embed("tv", "tt0944947", season=1, episode=1, preferred="vidbolt")
-        assert res_vidbolt["provider"] == "vidbolt"
-        assert res_vidbolt["embed_url"] == "https://vidbolt.org/embed/tv/tt0944947/1/1"
+        res_vidsrc = EmbedEngine.get_preferred_embed("tv", "tt0944947", season=1, episode=1, preferred="vidsrc")
+        assert res_vidsrc["provider"] == "vidsrc"
+        assert res_vidsrc["embed_url"] == "https://vidsrc.pm/embed/tv/tt0944947/1/1"
 
     def test_preferred_embed_with_title_and_imdb_id(self):
         """Test get_preferred_embed with title and imdb_id kwargs."""
         result = EmbedEngine.get_preferred_embed(title="Dune", imdb_id="tt1160419", preferred="vidrift")
         assert result["provider"] == "vidrift"
         assert result["embed_url"] == "https://vidrift.com/embed/movie/tt1160419"
-        assert len(result["all_providers"]) == 5
+        assert len(result["all_providers"]) == 7
 
     def test_preferred_embed_alias_vidsrc(self):
-        """Test preferred embed resolves alias 'vidsrc' to 'vidy'."""
+        """Test preferred embed resolves alias 'vidsrc'."""
         result = EmbedEngine.get_preferred_embed("movie", "tt0137523", preferred="vidsrc")
-        assert result["provider"] == "vidy"
+        assert result["provider"] == "vidsrc"
         assert result["embed_url"] == "https://vidsrc.pm/embed/movie/tt0137523"
 
     def test_preferred_embed_fallback_on_unknown(self):
         """Test fallback provider selection when an unknown provider is passed."""
         result = EmbedEngine.get_preferred_embed("movie", "tt0137523", preferred="nonexistent_streamer")
-        assert result["provider"] == "filmu"
-        assert result["embed_url"] == "https://embed.filmu.in/movie/tt0137523"
+        assert result["provider"] == "autoembed"
+        assert result["embed_url"] == "https://autoembed.co/movie/imdb/tt0137523"
 
     def test_start_time_parameter_query(self):
         """Test start time parameter generation with query string ?start={sec}."""
         urls = EmbedEngine.get_embed_urls("movie", "tt0137523", start_time=120)
-        assert urls["filmu"] == "https://embed.filmu.in/movie/tt0137523?start=120"
-        assert urls["cinezo"] == "https://cinezo.net/embed/movie/tt0137523?start=120"
-        assert urls["vidbolt"] == "https://vidbolt.org/embed/movie/tt0137523?start=120"
-        assert urls["vidy"] == "https://vidsrc.pm/embed/movie/tt0137523?start=120"
-        assert urls["vidrift"] == "https://vidrift.com/embed/movie/tt0137523?start=120"
+        assert urls["autoembed"] == "https://autoembed.co/movie/imdb/tt0137523?start=120"
+        assert urls["vidsrc"] == "https://vidsrc.pm/embed/movie/tt0137523?start=120"
 
     def test_start_time_parameter_hash(self):
         """Test start time parameter generation with hash fragment #t={sec}."""
         urls = EmbedEngine.get_embed_urls("tv", "tt0944947", season=1, episode=1, start_time=300, time_format="hash")
+        assert urls["autoembed"] == "https://autoembed.co/tv/imdb/tt0944947-1-1#t=300"
+        assert urls["vidsrc"] == "https://vidsrc.pm/embed/tv/tt0944947/1/1#t=300"
         assert urls["filmu"] == "https://embed.filmu.in/tv/tt0944947/1/1#t=300"
         assert urls["cinezo"] == "https://cinezo.net/embed/tv/tt0944947/1/1#t=300"
-        assert urls["vidbolt"] == "https://vidbolt.org/embed/tv/tt0944947/1/1#t=300"
-        assert urls["vidy"] == "https://vidsrc.pm/embed/tv/tt0944947/1/1#t=300"
         assert urls["vidrift"] == "https://vidrift.com/embed/tv/tt0944947/1/1#t=300"
 
     def test_start_time_via_kwargs(self):

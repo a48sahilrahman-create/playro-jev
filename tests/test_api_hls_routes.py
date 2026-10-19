@@ -278,12 +278,12 @@ async def test_embed_sources_movie(client: httpx.AsyncClient):
     assert res.status_code == 200
     data = res.json()
 
-    assert data["provider"] in ("filmu", "cinezo", "vidbolt", "vidy", "vidrift")
+    assert data["provider"] in ("autoembed", "vidsrc", "vidsrcme", "twoembed", "filmu", "cinezo", "vidrift")
     assert "embed_url" in data
     assert "tt0137523" in data["embed_url"]
 
     all_providers = data["all_providers"]
-    for prov in ("filmu", "cinezo", "vidbolt", "vidy", "vidrift"):
+    for prov in ("autoembed", "vidsrc", "vidsrcme", "twoembed", "filmu", "cinezo", "vidrift"):
         assert prov in all_providers
         assert "tt0137523" in all_providers[prov]
         assert all_providers[prov].startswith("https://")
@@ -299,11 +299,12 @@ async def test_embed_sources_tv_series(client: httpx.AsyncClient):
     assert res.status_code == 200
     data = res.json()
 
-    assert "/3/9" in data["embed_url"]
+    assert "-3-9" in data["embed_url"] or "/3/9" in data["embed_url"]
     all_providers = data["all_providers"]
+    assert "https://autoembed.co/tv/imdb/tt0944947-3-9" == all_providers["autoembed"]
+    assert "https://vidsrc.pm/embed/tv/tt0944947/3/9" == all_providers["vidsrc"]
     assert "https://embed.filmu.in/tv/tt0944947/3/9" == all_providers["filmu"]
     assert "https://cinezo.net/embed/tv/tt0944947/3/9" == all_providers["cinezo"]
-    assert "https://vidbolt.org/embed/tv/tt0944947/3/9" == all_providers["vidbolt"]
 
 
 @pytest.mark.anyio
@@ -311,12 +312,12 @@ async def test_embed_sources_preferred_provider(client: httpx.AsyncClient):
     """Verify selecting a preferred provider switches the primary embed_url."""
     res = await client.get(
         "/api/embed/sources",
-        params={"type": "movie", "id": "tt0137523", "preferred": "vidbolt"}
+        params={"type": "movie", "id": "tt0137523", "preferred": "vidsrc"}
     )
     assert res.status_code == 200
     data = res.json()
-    assert data["provider"] == "vidbolt"
-    assert "https://vidbolt.org/embed/movie/tt0137523" == data["embed_url"]
+    assert data["provider"] == "vidsrc"
+    assert "https://vidsrc.pm/embed/movie/tt0137523" == data["embed_url"]
 
 
 @pytest.mark.anyio
@@ -442,17 +443,18 @@ async def test_playback_cascade_get_with_title_and_year(client: httpx.AsyncClien
 
 @pytest.mark.anyio
 async def test_embed_sources_by_title_and_year(client: httpx.AsyncClient):
-    """Verify GET /api/embed/sources accepts title, year, season, episode and returns all 5 provider embed URLs."""
+    """Verify GET /api/embed/sources accepts title, year, season, episode and returns all provider embed URLs."""
     res = await client.get("/api/embed/sources", params={"title": "Breaking Bad", "year": "2008", "season": 1, "episode": 1})
     assert res.status_code == 200
     data = res.json()
 
     assert "all_providers" in data
     assert "sources" in data
-    for provider in ("filmu", "cinezo", "vidbolt", "vidy", "vidrift"):
+    for provider in ("autoembed", "vidsrc", "vidsrcme", "twoembed", "filmu", "cinezo", "vidrift"):
         assert provider in data["all_providers"]
         assert provider in data["sources"]
-        assert "/1/1" in data["all_providers"][provider]
+        prov_url = data["all_providers"][provider]
+        assert any(coord in prov_url for coord in ("-1-1", "/1/1", "s=1&e=1", "season=1&episode=1"))
 
 
 @pytest.mark.anyio

@@ -494,6 +494,7 @@ class HLSSession:
         # Protocol reconnect options are valid for network streams (http/https)
         if self.media_url.startswith(("http://", "https://")):
             cmd.extend([
+                "-user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
                 "-reconnect", "1",
                 "-reconnect_at_eof", "1",
                 "-reconnect_streamed", "1",

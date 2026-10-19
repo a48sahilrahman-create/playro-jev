@@ -20,18 +20,39 @@ import urllib.parse
 class EmbedEngine:
     """Multi-provider embed streaming endpoint generator and fallback engine."""
 
-    PROVIDERS: List[str] = ["filmu", "cinezo", "vidbolt", "vidy", "vidrift"]
+    PROVIDERS: List[str] = ["autoembed", "vidsrc", "vidsrcme", "twoembed", "filmu", "cinezo", "vidrift"]
 
     PROVIDER_ALIASES: Dict[str, str] = {
-        "vidsrc": "vidy",
-        "vidsrc.pm": "vidy",
+        "auto": "autoembed",
+        "autoembed.co": "autoembed",
+        "vidy": "vidsrc",
+        "vidsrc.pm": "vidsrc",
+        "vidsrc.me": "vidsrcme",
+        "vidsrc_me": "vidsrcme",
+        "2embed": "twoembed",
+        "2embed.cc": "twoembed",
         "filmu.in": "filmu",
         "cinezo.net": "cinezo",
-        "vidbolt.org": "vidbolt",
         "vidrift.com": "vidrift",
     }
 
     PROVIDER_TEMPLATES: Dict[str, Dict[str, str]] = {
+        "autoembed": {
+            "movie": "https://autoembed.co/movie/imdb/{clean_id}",
+            "tv": "https://autoembed.co/tv/imdb/{clean_id}-{season}-{episode}",
+        },
+        "vidsrc": {
+            "movie": "https://vidsrc.pm/embed/movie/{clean_id}",
+            "tv": "https://vidsrc.pm/embed/tv/{clean_id}/{season}/{episode}",
+        },
+        "vidsrcme": {
+            "movie": "https://vidsrc.me/embed/movie?imdb={clean_id}",
+            "tv": "https://vidsrc.me/embed/tv?imdb={clean_id}&season={season}&episode={episode}",
+        },
+        "twoembed": {
+            "movie": "https://www.2embed.cc/embed/{clean_id}",
+            "tv": "https://www.2embed.cc/embedtv/{clean_id}&s={season}&e={episode}",
+        },
         "filmu": {
             "movie": "https://embed.filmu.in/movie/{clean_id}",
             "tv": "https://embed.filmu.in/tv/{clean_id}/{season}/{episode}",
@@ -39,14 +60,6 @@ class EmbedEngine:
         "cinezo": {
             "movie": "https://cinezo.net/embed/movie/{clean_id}",
             "tv": "https://cinezo.net/embed/tv/{clean_id}/{season}/{episode}",
-        },
-        "vidbolt": {
-            "movie": "https://vidbolt.org/embed/movie/{clean_id}",
-            "tv": "https://vidbolt.org/embed/tv/{clean_id}/{season}/{episode}",
-        },
-        "vidy": {
-            "movie": "https://vidsrc.pm/embed/movie/{clean_id}",
-            "tv": "https://vidsrc.pm/embed/tv/{clean_id}/{season}/{episode}",
         },
         "vidrift": {
             "movie": "https://vidrift.com/embed/movie/{clean_id}",
@@ -201,7 +214,7 @@ class EmbedEngine:
         season: Optional[int] = None,
         episode: Optional[int] = None,
         imdb_id: str = "",
-        preferred: str = "filmu",
+        preferred: str = "autoembed",
         start_time: Optional[Union[int, float, str]] = None,
         media_type: Optional[str] = None,
         item_id: Optional[str] = None,
@@ -235,13 +248,13 @@ class EmbedEngine:
             **kwargs,
         )
 
-        pref_key = (preferred or "filmu").strip().lower()
+        pref_key = (preferred or "autoembed").strip().lower()
         if pref_key in all_urls:
             selected_provider = pref_key
         elif pref_key in cls.PROVIDER_ALIASES and cls.PROVIDER_ALIASES[pref_key] in all_urls:
             selected_provider = cls.PROVIDER_ALIASES[pref_key]
         else:
-            selected_provider = "filmu" if "filmu" in all_urls else (next(iter(all_urls.keys())) if all_urls else "")
+            selected_provider = "autoembed" if "autoembed" in all_urls else (next(iter(all_urls.keys())) if all_urls else "")
 
         selected_url = all_urls.get(selected_provider, "")
 

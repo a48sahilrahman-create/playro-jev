@@ -770,19 +770,22 @@ class LinkResolver:
             if full_href in seen or full_href == page_url or not is_safe_url(full_href):
                 continue
 
-            if any(k in href.lower() or k in txt.lower() for k in ["instant", "resume", "download", "fast", "server", "mirror", "cloud", "direct", "worker", "vcloud", "hubcloud", "gamerxyt"]):
+            if any(k in href.lower() or k in txt.lower() for k in ["instant", "resume", "download", "fast", "server", "mirror", "cloud", "direct", "worker", "vcloud", "hubcloud", "gamerxyt", "cryptonewz", "10gbps"]):
                 seen.add(full_href)
                 candidates.append({"type": "dynamic_button", "url": full_href, "label": txt or "Mirror Option"})
 
-        # Prioritize zero-login high-speed CDNs (Workers.dev > R2 > Pixeldrain > Google CDN)
+        # Prioritize zero-login high-speed CDNs (R2 > Fast CDN Mirrors > Pixeldrain > Workers > Google CDN)
         for c in candidates:
             c_url = c.get("url", "")
-            if "workers.dev" in c_url:
-                c["score"] = 100
-            elif "r2.cloudflarestorage.com" in c_url or ".r2.dev" in c_url:
+            cand_text = f"{c_url} {c.get('label', '')}".lower()
+            if "r2.cloudflarestorage.com" in c_url or ".r2.dev" in c_url:
                 c["score"] = 95
+            elif any(k in cand_text for k in ["pixel.hubcloud.", "pixel.hubcloud", "cryptonewz.", "cryptonewz", "10gbps", "server", "mirror"]):
+                c["score"] = 92
             elif "pixeldrain" in c_url:
                 c["score"] = 90
+            elif "workers.dev" in c_url:
+                c["score"] = 88
             elif "video-downloads.googleusercontent.com" in c_url:
                 c["score"] = 85
             elif any(k in c_url for k in ["video-gen", "video-seed", "video-plex"]):
@@ -827,21 +830,30 @@ class LinkResolver:
                     resp_text = getattr(probe_resp, "text", "") or ""
                     resp_lower = resp_text.lower()
                     if (
-                        probe_resp.status_code == 403
+                        probe_resp.status_code in (403, 500, 502, 503)
+                        or probe_resp.status_code >= 400
                         or "downloadquotaexceeded" in resp_lower
                         or "quota exceeded" in resp_lower
                         or '{"error":' in resp_text
                         or '{"error"' in resp_text
+                        or resp_text.startswith('{\n')
+                        or resp_text.startswith('{"')
                     ):
                         elapsed = round((time.perf_counter() - t0) * 1000, 2)
                         return {
-                            "status": "QUOTA_EXCEEDED",
-                            "error": "Google Drive quota exceeded on Cloudflare Worker",
+                            "status": "QUOTA_EXCEEDED" if (probe_resp.status_code in (403, 500) or "quota" in resp_lower) else "FAILED",
+                            "error": f"Upstream error {probe_resp.status_code} or quota exceeded on {host_label}",
                             "direct_url": url,
                             "elapsed_ms": elapsed
                         }
                 except Exception as probe_err:
                     logger.warning(f"[Probe Error] Candidate probe exception for {url}: {probe_err}")
+                    return {
+                        "status": "FAILED",
+                        "error": f"Connection probe failed: {probe_err}",
+                        "direct_url": url,
+                        "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
+                    }
 
                 return {
                     "status": "SUCCESS",
@@ -856,6 +868,36 @@ class LinkResolver:
                 if w_match:
                     direct = w_match.group(0).replace("&amp;", "&").rstrip('\\"')
                     if is_safe_url(direct):
+                        try:
+                            probe_headers = {"Range": "bytes=0-1024", **DEFAULT_HEADERS}
+                            probe_resp = await client.get(direct, headers=probe_headers, timeout=3.0, follow_redirects=True)
+                            resp_text = getattr(probe_resp, "text", "") or ""
+                            resp_lower = resp_text.lower()
+                            if (
+                                probe_resp.status_code in (403, 500, 502, 503)
+                                or probe_resp.status_code >= 400
+                                or "downloadquotaexceeded" in resp_lower
+                                or "quota exceeded" in resp_lower
+                                or '{"error":' in resp_text
+                                or '{"error"' in resp_text
+                                or resp_text.startswith('{\n')
+                                or resp_text.startswith('{"')
+                            ):
+                                elapsed = round((time.perf_counter() - t0) * 1000, 2)
+                                return {
+                                    "status": "QUOTA_EXCEEDED" if (probe_resp.status_code in (403, 500) or "quota" in resp_lower) else "FAILED",
+                                    "error": f"Upstream error {probe_resp.status_code} or quota exceeded on Cloud Resume Worker",
+                                    "direct_url": direct,
+                                    "elapsed_ms": elapsed
+                                }
+                        except Exception as probe_err:
+                            return {
+                                "status": "FAILED",
+                                "error": f"Connection probe failed: {probe_err}",
+                                "direct_url": direct,
+                                "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
+                            }
+
                         return {
                             "status": "SUCCESS",
                             "host": "Cloud Resume Worker",
@@ -947,10 +989,80 @@ class LinkResolver:
                             "direct_url": resp_url_str,
                             "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
                         }
+
+                # 1. Check query parameters (?link=, ?url=, etc.) on resp_url_str
+                parsed_resp = urllib.parse.urlparse(resp_url_str)
+                qs = urllib.parse.parse_qs(parsed_resp.query)
+                for qk in ["link", "url", "download", "file"]:
+                    if qk in qs and qs[qk]:
+                        link_val = qs[qk][0].replace("&amp;", "&").strip('\'"<>\\ ')
+                        for _ in range(2):
+                            if "%" in link_val:
+                                link_val = urllib.parse.unquote(link_val).strip('\'"<>\\ ')
+                        if any(k in link_val.lower() for k in ["video-downloads.googleusercontent.com", "pixeldrain", "r2", "workers.dev", "cloudflarestorage.com", ".mkv", ".mp4"]):
+                            if "pixeldrain" in link_val and "/u/" in link_val:
+                                pd_id = link_val.split("/u/")[-1].split("?")[0].strip("/")
+                                link_val = f"https://pixeldrain.dev/api/file/{pd_id}"
+                            if is_safe_url(link_val):
+                                return {
+                                    "status": "SUCCESS",
+                                    "host": "Direct CDN Stream",
+                                    "direct_url": link_val,
+                                    "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
+                                }
+
+                # 2. Check resp_url_str or r.text for direct CDN URLs (Google CDN, Pixeldrain API, CryptoNewz)
+                combined_content = f"{resp_url_str} {r.text}"
+
+                # Google CDN check
+                g_match = re.search(r'https?://video-downloads\.googleusercontent\.com/[^\s\'"<>\\]+', combined_content)
+                if g_match:
+                    g_direct = g_match.group(0).replace("&amp;", "&").rstrip('\\"')
+                    if is_safe_url(g_direct):
+                        return {
+                            "status": "SUCCESS",
+                            "host": "Google CDN",
+                            "direct_url": g_direct,
+                            "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
+                        }
+
+                # Pixeldrain API check
+                pd_match = re.search(r'https?://pixeldrain\.(?:com|dev)/(?:u|api/file)/([a-zA-Z0-9]+)', combined_content)
+                if pd_match and pd_match.group(1) not in ["negn6f", ""]:
+                    pd_direct = f"https://pixeldrain.dev/api/file/{pd_match.group(1)}"
+                    if is_safe_url(pd_direct):
+                        return {
+                            "status": "SUCCESS",
+                            "host": "Pixeldrain API",
+                            "direct_url": pd_direct,
+                            "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
+                        }
+
+                # CryptoNewz check
+                crypto_match = re.search(r'(?:https?://)?(?:[a-zA-Z0-9.-]+\.)?cryptonewz\.online/dl\.php\?link=([^\s\'"<>\\]+)', combined_content)
+                if crypto_match:
+                    raw_target = crypto_match.group(1).replace("&amp;", "&").strip('\'"<>\\ ')
+                    for _ in range(2):
+                        if "%" in raw_target:
+                            raw_target = urllib.parse.unquote(raw_target).strip('\'"<>\\ ')
+                    if "pixeldrain" in raw_target and "/u/" in raw_target:
+                        pd_id = raw_target.split("/u/")[-1].split("?")[0].strip("/")
+                        raw_target = f"https://pixeldrain.dev/api/file/{pd_id}"
+                    c_direct = raw_target if raw_target.startswith("http") else crypto_match.group(0).replace("&amp;", "&").rstrip('\\"')
+                    if not c_direct.startswith("http"):
+                        c_direct = urllib.parse.urljoin(resp_url_str, c_direct)
+                    if is_safe_url(c_direct):
+                        return {
+                            "status": "SUCCESS",
+                            "host": "CryptoNewz CDN",
+                            "direct_url": c_direct,
+                            "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
+                        }
+
                 # Check for R2 / Pixeldrain / Workers inside response
                 sub_candidates = await self.harvest_all_options(client, resp_url_str, html=r.text)
                 for sc in sub_candidates:
-                    if sc.get("type") in ["worker_direct", "r2_direct", "pixeldrain"]:
+                    if sc.get("type") in ["worker_direct", "r2_direct", "pixeldrain", "instant_cdn"]:
                         return {
                             "status": "SUCCESS",
                             "host": sc.get("label", "Direct CDN"),
@@ -1315,14 +1427,23 @@ class LinkResolver:
                 if is_safe_url(hub_url):
                     r2 = await self.safe_fetch(client, "GET", hub_url, headers={"Referer": target_url, **DEFAULT_HEADERS}, timeout=HOP_TIMEOUT)
                     sub_cands = await self.harvest_all_options(client, hub_url, html=r2.text)
+                    for sc in sub_cands:
+                        sc["parent_url"] = hub_url
                     candidates.extend(sub_cands)
 
             if candidates:
-                tasks = [self.resolve_candidate(client, c, parent_url=target_url) for c in candidates]
+                candidates.sort(key=lambda x: x.get("score", 0), reverse=True)
+                tasks = [self.resolve_candidate(client, c, parent_url=c.get("parent_url") or target_url) for c in candidates]
+                quota_exceeded_res = None
                 for completed in asyncio.as_completed(tasks):
                     res = await completed
                     if res.get("status") == "SUCCESS" and res.get("direct_url"):
                         return res
+                    if res.get("status") == "QUOTA_EXCEEDED":
+                        quota_exceeded_res = res
+
+                if quota_exceeded_res:
+                    return quota_exceeded_res
 
         except Exception as e:
             elapsed = round((time.perf_counter() - t0) * 1000, 2)

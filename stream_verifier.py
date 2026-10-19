@@ -56,14 +56,15 @@ class StreamVerifier:
             if bo != -1 and bc != -1 and bo < dc < bc and url_str.count('::') == 1:
                 is_ipv6_only = True
 
-            if not is_ipv6_only:
+            is_worker_crypto_path = any(k in url_str for k in ["workers.dev", "pages.dev", "hubcloud"])
+            if not is_ipv6_only and not is_worker_crypto_path:
                 if bo != -1 and bc != -1 and bo < dc < bc:
                     base = url_str[:bc+1]
                     rest = url_str[bc+1:]
                     parts = [base + rest.split('::')[0]] + rest.split('::')[1:]
                 else:
                     parts = url_str.split('::')
-                if parts[0].startswith(('http://', 'https://')):
+                if parts[0].startswith(('http://', 'https://')) and any('=' in p for p in parts[1:]):
                     clean_url = parts[0].strip()
                     for extra in parts[1:]:
                         extra = extra.strip()

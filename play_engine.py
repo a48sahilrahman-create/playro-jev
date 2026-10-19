@@ -99,10 +99,16 @@ def rank_release(release: dict) -> tuple:
 
     # Prioritize hosts with instant 1-click playable direct video streams (R2 / Pixeldrain / Google CDN / NexDrive)
     target = (release.get("target_url") or release.get("direct_url") or "").lower()
+    label = (release.get("label") or "").lower()
+    title = (release.get("title") or "").lower()
+    combined_meta = f"{target} {label} {title}"
+
     host_score = 0
-    if any(h in target for h in ["nexdrive", "vcloud", "r2.", "pixeldrain", "googleusercontent", "worker"]):
+    if any(h in combined_meta for h in ["nexdrive", "vcloud", "r2.", "pixeldrain", "googleusercontent"]):
         host_score = 100
-    elif any(h in target for h in ["hubdrive", "gamerxyt", "hubcloud"]):
+    elif "hubdrive" in combined_meta:
+        host_score = 90  # Prioritize HubDrive over HubCloud and quota-vulnerable workers
+    elif any(h in combined_meta for h in ["hubcloud", "gamerxyt", "worker"]):
         host_score = 70
     elif target.startswith("magnet:"):
         host_score = 60

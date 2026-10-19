@@ -1611,7 +1611,14 @@
                     return sizeB - sizeA;
                 }
 
-                // 3) Codec score (REMUX > HEVC/10bit > x264)
+                // 3) Host tier: HubDrive & verified direct CDNs > HubCloud & quota-prone workers
+                const isHubDriveA = /hubdrive/i.test(`${a.title || ''} ${a.label || ''} ${a.target_url || ''}`);
+                const isHubDriveB = /hubdrive/i.test(`${b.title || ''} ${b.label || ''} ${b.target_url || ''}`);
+                if (isHubDriveA !== isHubDriveB) {
+                    return isHubDriveA ? -1 : 1;
+                }
+
+                // 4) Codec score (REMUX > HEVC/10bit > x264)
                 const codecA = getCodecScore(a.codec, a.title);
                 const codecB = getCodecScore(b.codec, b.title);
                 if (codecB !== codecA) {
@@ -3638,7 +3645,7 @@
         async function openExternalVLC(streamUrl, startTime = 0) {
             const target = streamUrl || currentStreamUrl || currentDirectUrl;
             if (!target) {
-                alert("No stream selected to play.");
+                showToast("⚠️ No stream selected to play.", 4000);
                 return;
             }
 
@@ -3709,12 +3716,27 @@
                     }, 1500);
                     return;
                 } else {
-                    alert(`⚠️ ${data.error || 'Could not resolve stream for this release.'}`);
+                    const errMsg = data.error || 'Could not resolve stream for this release.';
+                    console.warn("VLC playback error:", errMsg);
+
+                    // Auto-failover to next candidate in waterfall if available
+                    if (currentWaterfall && currentWaterfallIndex < currentWaterfall.length) {
+                        const nextMirror = currentWaterfall[currentWaterfallIndex++];
+                        showToast(`⚠️ ${errMsg}. Auto-switching to next mirror (${nextMirror.badge || 'Mirror'})...`, 6000);
+                        const nextTarget = nextMirror.rawTarget || nextMirror.streamUrl;
+                        if (nextTarget) {
+                            setTimeout(() => {
+                                openExternalVLC(nextTarget, startTime);
+                            }, 500);
+                        }
+                    } else {
+                        showToast(`⚠️ ${errMsg}. No additional direct mirrors available.`, 8000);
+                    }
                     return;
                 }
             } catch (e) {
                 console.error("VLC launch error:", e);
-                alert(`⚠️ Error connecting to local VLC engine: ${e.message}`);
+                showToast(`⚠️ Error connecting to local VLC engine: ${e.message}`, 6000);
             }
         }
 

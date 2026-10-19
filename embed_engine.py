@@ -2,11 +2,11 @@
 Embed Engine for Playro JEV.
 
 Provides unified embed fallback providers modeled after Bingr:
-1. Filmu
-2. Cinezo
-3. Vidbolt
-4. Vidy / VidSrc
-5. Vidrift
+1. Filmu: https://embed.filmu.in/movie/{imdb_id} | https://embed.filmu.in/tv/{imdb_id}/{season}/{episode}
+2. Cinezo: https://cinezo.net/embed/movie/{imdb_id} | https://cinezo.net/embed/tv/{imdb_id}/{season}/{episode}
+3. Vidbolt: https://vidbolt.org/embed/movie/{imdb_id} | https://vidbolt.org/embed/tv/{imdb_id}/{season}/{episode}
+4. Vidy / VidSrc: https://vidsrc.pm/embed/movie/{imdb_id} | https://vidsrc.pm/embed/tv/{imdb_id}/{season}/{episode}
+5. Vidrift: https://vidrift.com/embed/movie/{imdb_id} | https://vidrift.com/embed/tv/{imdb_id}/{season}/{episode}
 
 Supports movies, TV series, IMDb/TMDB ID normalization, preferred provider selection,
 and optional start time parameter generation.
@@ -117,28 +117,59 @@ class EmbedEngine:
     @classmethod
     def get_embed_urls(
         cls,
-        media_type: str,
-        item_id: str,
+        title: str = "",
+        year: str = "",
         season: Optional[int] = None,
         episode: Optional[int] = None,
+        imdb_id: str = "",
+        media_type: Optional[str] = None,
+        item_id: Optional[str] = None,
         start_time: Optional[Union[int, float, str]] = None,
         **kwargs: Any,
     ) -> Dict[str, str]:
-        """Returns a dict mapping provider name to embed URL for all supported providers.
+        """Returns a dict mapping provider name to embed URL for all 5 providers.
 
-        Args:
-            media_type: 'movie', 'tv', or 'series'.
-            item_id: IMDb ID (e.g. 'tt0137523') or TMDB ID (e.g. '550').
-            season: TV Season number (default 1 if media_type is TV).
-            episode: TV Episode number (default 1 if media_type is TV).
-            start_time: Optional start time in seconds.
-            **kwargs: Optional time_format ('query' or 'hash'), start parameter alias.
+        Supports both:
+        - get_embed_urls(title: str, year: str = "", season: int = None, episode: int = None, imdb_id: str = "")
+        - get_embed_urls(media_type: str, item_id: str, season: int = None, episode: int = None, ...)
         """
-        clean_id = cls.normalize_id(item_id)
-        norm_type = (media_type or "").strip().lower()
+        # Resolve aliases from kwargs
+        if not media_type and "type" in kwargs:
+            media_type = kwargs["type"]
+        if not item_id and "id" in kwargs:
+            item_id = kwargs["id"]
+
+        # Determine raw identifier
+        raw_id = imdb_id or item_id
+        norm_type = str(media_type).strip().lower() if media_type else ""
+
+        # Positional compatibility: if title is 'movie'/'tv'/'series' and year is the ID
+        if title and str(title).strip().lower() in ("movie", "tv", "series", "show", "episode"):
+            if not norm_type:
+                norm_type = str(title).strip().lower()
+            if not raw_id and year:
+                raw_id = year
+        elif not raw_id:
+            # Check if title itself is an ID (e.g. tt...)
+            if title and (str(title).strip().lower().startswith("tt") or str(title).strip().isdigit()):
+                raw_id = title
+            elif year and (str(year).strip().lower().startswith("tt") or str(year).strip().isdigit()):
+                raw_id = year
+            else:
+                raw_id = title or ""
+
+        clean_id = cls.normalize_id(raw_id)
+
+        # Determine media type (movie vs tv)
+        if not norm_type:
+            if season is not None or episode is not None:
+                norm_type = "tv"
+            else:
+                norm_type = "movie"
+
         is_tv = norm_type in ("tv", "series", "show", "episode")
 
-        # Resolve start_time from kwargs if not directly passed
+        # Resolve start_time
         effective_start = start_time if start_time is not None else kwargs.get("start")
         time_format = kwargs.get("time_format", "query")
 
@@ -165,12 +196,15 @@ class EmbedEngine:
     @classmethod
     def get_preferred_embed(
         cls,
-        media_type: str,
-        item_id: str,
+        title: str = "",
+        year: str = "",
         season: Optional[int] = None,
         episode: Optional[int] = None,
+        imdb_id: str = "",
         preferred: str = "filmu",
         start_time: Optional[Union[int, float, str]] = None,
+        media_type: Optional[str] = None,
+        item_id: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """Returns preferred embed along with full provider fallback dict.
@@ -182,11 +216,21 @@ class EmbedEngine:
             "all_providers": { ... }
         }
         """
+        # Handle provider passed as 5th positional argument or in kwargs
+        if "preferred" in kwargs:
+            preferred = kwargs.pop("preferred")
+        elif imdb_id and (imdb_id.lower() in cls.PROVIDERS or imdb_id.lower() in cls.PROVIDER_ALIASES):
+            preferred = imdb_id
+            imdb_id = ""
+
         all_urls = cls.get_embed_urls(
-            media_type=media_type,
-            item_id=item_id,
+            title=title,
+            year=year,
             season=season,
             episode=episode,
+            imdb_id=imdb_id,
+            media_type=media_type,
+            item_id=item_id,
             start_time=start_time,
             **kwargs,
         )
@@ -197,7 +241,6 @@ class EmbedEngine:
         elif pref_key in cls.PROVIDER_ALIASES and cls.PROVIDER_ALIASES[pref_key] in all_urls:
             selected_provider = cls.PROVIDER_ALIASES[pref_key]
         else:
-            # Fallback to filmu or first available provider
             selected_provider = "filmu" if "filmu" in all_urls else (next(iter(all_urls.keys())) if all_urls else "")
 
         selected_url = all_urls.get(selected_provider, "")

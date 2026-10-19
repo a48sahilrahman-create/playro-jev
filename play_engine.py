@@ -104,6 +104,8 @@ def rank_release(release: dict) -> tuple:
         host_score = 100
     elif any(h in target for h in ["hubdrive", "gamerxyt", "hubcloud"]):
         host_score = 70
+    elif target.startswith("magnet:"):
+        host_score = 60
     elif "t.me" in target or "tg://" in target:
         host_score = 50
     elif "unblockedgames" in target or "driveseed" in target:
@@ -121,7 +123,7 @@ class PlayEngine:
         self.link_resolver = LinkResolver()
         self.vlc_path = find_vlc()
 
-    async def search(self, query: str, year: Optional[str] = None, imdb_id: Optional[str] = None, season: Optional[int] = None, episode: Optional[int] = None) -> dict:
+    async def search(self, query: str, year: Optional[str] = None, imdb_id: Optional[str] = None, season: Optional[int] = None, episode: Optional[int] = None, tmdb_id: Optional[str] = None) -> dict:
         """
         Unified Live Multi-Source Parallel Search across VegaMovies, UHDMovies,
         HDHub4u, OlaMovies, Telegram, and YouTube.
@@ -149,9 +151,12 @@ class PlayEngine:
         for sq in search_queries:
             try:
                 try:
-                    stream_iter = self.dispatcher.stream_all_parallel(sq, season=season, episode=episode)
+                    stream_iter = self.dispatcher.stream_all_parallel(sq, season=season, episode=episode, tmdb_id=tmdb_id)
                 except TypeError:
-                    stream_iter = self.dispatcher.stream_all_parallel(sq)
+                    try:
+                        stream_iter = self.dispatcher.stream_all_parallel(sq, season=season, episode=episode)
+                    except TypeError:
+                        stream_iter = self.dispatcher.stream_all_parallel(sq)
                 async for batch in stream_iter:
                     if isinstance(batch, list):
                         for item in batch:
@@ -161,6 +166,8 @@ class PlayEngine:
                                 continue
                             if target and target not in seen_targets:
                                 seen_targets.add(target)
+                                if target.startswith("magnet:") and not item.get("direct_url"):
+                                    item["direct_url"] = target
                                 all_candidates.append(item)
             except Exception:
                 pass
@@ -177,6 +184,7 @@ class PlayEngine:
             "formatted_title": clean_title,
             "year": year,
             "imdb_id": imdb_id,
+            "tmdb_id": tmdb_id,
             "season": season,
             "episode": episode,
             "count": len(sorted_releases),

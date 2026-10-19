@@ -143,7 +143,20 @@ def is_safe_url(url: str, allow_local: bool = False) -> bool:
     if not url or not isinstance(url, str):
         return False
     try:
-        parsed = urllib.parse.urlparse(url.strip())
+        check_url = url.strip()
+        if "::" in check_url:
+            is_ipv6_only = False
+            bo = check_url.find('[')
+            bc = check_url.find(']')
+            dc = check_url.find('::')
+            if bo != -1 and bc != -1 and bo < dc < bc and check_url.count('::') == 1:
+                is_ipv6_only = True
+            if not is_ipv6_only:
+                if bo != -1 and bc != -1 and bo < dc < bc:
+                    check_url = check_url[:bc+1] + check_url[bc+1:].split('::')[0]
+                else:
+                    check_url = check_url.split('::')[0].strip()
+        parsed = urllib.parse.urlparse(check_url)
         if parsed.scheme not in ("http", "https"):
             return False
 
@@ -806,6 +819,30 @@ class LinkResolver:
 
         try:
             if c_type in ("worker_direct", "r2_direct", "pixeldrain"):
+                try:
+                    probe_headers = {"Range": "bytes=0-1024", **DEFAULT_HEADERS}
+                    if parent_url:
+                        probe_headers["Referer"] = parent_url
+                    probe_resp = await client.get(url, headers=probe_headers, timeout=3.0, follow_redirects=True)
+                    resp_text = getattr(probe_resp, "text", "") or ""
+                    resp_lower = resp_text.lower()
+                    if (
+                        probe_resp.status_code == 403
+                        or "downloadquotaexceeded" in resp_lower
+                        or "quota exceeded" in resp_lower
+                        or '{"error":' in resp_text
+                        or '{"error"' in resp_text
+                    ):
+                        elapsed = round((time.perf_counter() - t0) * 1000, 2)
+                        return {
+                            "status": "QUOTA_EXCEEDED",
+                            "error": "Google Drive quota exceeded on Cloudflare Worker",
+                            "direct_url": url,
+                            "elapsed_ms": elapsed
+                        }
+                except Exception as probe_err:
+                    logger.warning(f"[Probe Error] Candidate probe exception for {url}: {probe_err}")
+
                 return {
                     "status": "SUCCESS",
                     "host": candidate.get("label", "Direct CDN"),
@@ -1419,7 +1456,7 @@ class LinkResolver:
     # -------------------------------------------------------------
     # 8. OlaMovies / OMDrive / dl.olamdrive Resolver (80ms - 180ms)
     # -------------------------------------------------------------
-    async def resolve_olamovies(self, client: httpx.AsyncClient, url: str, allow_interactive: bool = True) -> dict:
+    async def resolve_olamovies(self, client: httpx.AsyncClient, url: str, allow_interactive: bool = False) -> dict:
         """Resolve OlaMovies / OMDrive link with dynamic Cloudflare stealth solver and adaptive wait."""
         t0 = time.perf_counter()
         if not url:
@@ -1530,7 +1567,7 @@ class LinkResolver:
                         "status": "CLOUDFLARE_PROTECTED",
                         "host": "OlaMovies Protected",
                         "direct_url": url,
-                        "error": "Cloudflare Turnstile Active",
+                        "error": "Cloudflare Turnstile Active (Automated solve failed)",
                         "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
                     }
 
@@ -1593,7 +1630,7 @@ class LinkResolver:
     # -------------------------------------------------------------
     # 9. Auto Dispatcher Router (Resilient, Multi-Option Race)
     # -------------------------------------------------------------
-    async def resolve_auto(self, url: str, allow_interactive: bool = True) -> dict:
+    async def resolve_auto(self, url: str, allow_interactive: bool = False) -> dict:
         """
         Automatically route incoming URL to dedicated pure async multi-option resolver.
         Guarantees zero crashes on malformed URLs, timeouts, or dead links.

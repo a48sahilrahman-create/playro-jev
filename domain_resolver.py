@@ -222,7 +222,16 @@ class DomainResolver:
             temp_path = self.health_file.with_suffix(".tmp")
             with open(temp_path, "w", encoding="utf-8") as f:
                 json.dump(self._health, f, indent=2)
-            temp_path.replace(self.health_file)
+            try:
+                temp_path.replace(self.health_file)
+            except (PermissionError, OSError):
+                time.sleep(0.05)
+                try:
+                    temp_path.replace(self.health_file)
+                except Exception:
+                    with open(self.health_file, "w", encoding="utf-8") as f:
+                        json.dump(self._health, f, indent=2)
+                    temp_path.unlink(missing_ok=True)
         except Exception as e:
             logger.error(f"Error saving health to {self.health_file}: {e}")
 

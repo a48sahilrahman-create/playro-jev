@@ -1570,132 +1570,185 @@ class FastScrapers:
 
         return results
 
+    @staticmethod
+    def build_nyaa_queries(query: str, season: Optional[int] = None, episode: Optional[int] = None) -> list:
+        """Construct targeted anime queries on Nyaa for discrete episode precision."""
+        clean = query.strip()
+        if episode is not None:
+            return [
+                f'"{clean}" {episode:02d}',
+                f'"{clean}" {episode:03d}'
+            ]
+        return [clean]
+
     async def search_nyaa(self, client: httpx.AsyncClient, query: str, season: Optional[int] = None, episode: Optional[int] = None) -> list:
         """Fast search & catalog parsing on Nyaa (< 350ms)."""
         clean = query.strip()
-        encoded_query = urllib.parse.quote(clean)
         mirror = await self.domain_resolver.get_mirror("nyaa")
-        url = f"{mirror}/?f=0&c=0_0&q={encoded_query}"
         results = []
+        seen_magnets = set()
 
-        try:
-            resp = await client.get(url, headers=DEFAULT_HEADERS, timeout=3.5, follow_redirects=True)
-            if resp.status_code == 200:
-                await self.domain_resolver.report_success("nyaa")
-                soup = BeautifulSoup(resp.text, "lxml")
-                table = soup.find("table", class_=re.compile(r'torrent-list|table'))
-                rows = table.find_all("tr") if table else []
+        has_ep_in_query = bool(re.search(r'\b(?:episodes?|ep|e|s\d+e)\s*0*\d+\b|\s+-\s+\d+\b|\s+0\d+\b', query, re.I))
 
-                for tr in rows[1:]:
-                    tds = tr.find_all("td")
-                    if len(tds) < 6:
-                        continue
+        candidate_queries = self.build_nyaa_queries(clean, season=season, episode=episode)
+        fallback_query = clean if episode is not None else None
 
-                    # Title
-                    title_links = tds[1].find_all("a")
-                    if not title_links:
-                        continue
-                    title_a = title_links[-1]
-                    item_title = title_a.get_text(strip=True)
-                    if not item_title:
-                        continue
-                    clean_nyaa = re.sub(r'^\[[^\]]+\]\s*', '', item_title)
-                    clean_nyaa = re.sub(r'\s*\[[0-9A-Fa-f]{8}\].*', '', clean_nyaa)
-                    clean_nyaa = re.sub(r'\s*\.(mkv|mp4|avi)$', '', clean_nyaa, flags=re.I)
-                    clean_nyaa = re.sub(r'\s*-\s*\d+.*', '', clean_nyaa)
-                    clean_nyaa = re.sub(r'\s*\(\d+-\d+\).*', '', clean_nyaa)
-                    clean_nyaa = re.sub(r'\s*\(\d+p\).*', '', clean_nyaa, flags=re.I)
-                    if not is_strict_match(query, clean_nyaa.strip() or item_title):
-                        continue
+        async def fetch_nyaa_query(q_str: str) -> list:
+            sub_results = []
+            encoded_query = urllib.parse.quote(q_str)
+            url = f"{mirror}/?f=0&c=0_0&q={encoded_query}"
+            try:
+                resp = await client.get(url, headers=DEFAULT_HEADERS, timeout=6.0, follow_redirects=True)
+                if resp.status_code == 200:
+                    await self.domain_resolver.report_success("nyaa")
+                    soup = BeautifulSoup(resp.text, "lxml")
+                    table = soup.find("table", class_=re.compile(r'torrent-list|table'))
+                    rows = table.find_all("tr") if table else []
 
-                    # Magnet link
-                    magnet_a = tds[2].find("a", href=re.compile(r'^magnet:', re.I))
-                    if not magnet_a:
-                        torrent_a = tds[2].find("a", href=re.compile(r'\.torrent$', re.I))
-                        target_url = f"{mirror}{torrent_a['href']}" if torrent_a and torrent_a['href'].startswith("/") else (torrent_a['href'] if torrent_a else "")
-                    else:
-                        target_url = magnet_a["href"]
-
-                    if not target_url:
-                        continue
-
-                    size_val = tds[3].get_text(strip=True)
-                    seeders_val = tds[5].get_text(strip=True)
-
-                    # Anime episode and season detection
-                    s_num = None
-                    e_num = None
-
-                    se_m = re.search(r'\bS(\d{1,2})\s*[-._ ]?E(\d{1,3})\b', item_title, re.I)
-                    if se_m:
-                        s_num = int(se_m.group(1))
-                        e_num = int(se_m.group(2))
-                    else:
-                        s_m = re.search(r'\b(?:Season|S)\s*0*(\d{1,2})\b', item_title, re.I)
-                        if s_m:
-                            s_num = int(s_m.group(1))
-                        elif season is not None:
-                            s_num = season
-                        else:
-                            s_num = 1
-
-                        # Anime discrete episode patterns: " - 01", "Episode 01", "E01", " 01 "
-                        ep_m = re.search(r'(?:[-_ ]\s*0*(\d{1,3})\s*(?:v\d+)?\s*(?:\[|\(|\.|$))|\b(?:Episode|Ep|E)[-\s]*0*(\d{1,3})\b', item_title, re.I)
-                        if ep_m:
-                            e_num = int(ep_m.group(1) or ep_m.group(2))
-
-                    is_range = bool(re.search(r'(?:episodes?|ep|e)?\s*\d+\s*[-~]\s*\d+', item_title, re.I))
-                    is_batch_kw = any(k in item_title.lower() for k in ["batch", "complete", "series", "season", "01~", "01-", "vol."])
-
-                    if season is not None and s_num != season:
-                        continue
-
-                    if episode is not None:
-                        if is_batch_kw or is_range or e_num is None or e_num != episode:
+                    for tr in rows[1:]:
+                        tds = tr.find_all("td")
+                        if len(tds) < 6:
                             continue
-                        ep_tag = f"S{s_num:02d}E{e_num:02d}"
-                        is_batch = False
-                    else:
-                        if e_num is not None and not (is_batch_kw or is_range):
+
+                        # Title
+                        title_links = tds[1].find_all("a")
+                        if not title_links:
+                            continue
+                        title_a = title_links[-1]
+                        item_title = title_a.get_text(strip=True)
+                        if not item_title:
+                            continue
+
+                        clean_nyaa = re.sub(r'^\[[^\]]+\]\s*', '', item_title)
+                        clean_nyaa = re.sub(r'\s*\[[0-9A-Fa-f]{8}\].*', '', clean_nyaa)
+                        clean_nyaa = re.sub(r'\s*\.(mkv|mp4|avi)$', '', clean_nyaa, flags=re.I)
+                        if not has_ep_in_query:
+                            clean_nyaa = re.sub(r'\s*-\s*\d+.*', '', clean_nyaa)
+                            clean_nyaa = re.sub(r'\s*\(\d+-\d+\).*', '', clean_nyaa)
+                            clean_nyaa = re.sub(r'\s*\(\d+p\).*', '', clean_nyaa, flags=re.I)
+
+                        if not is_strict_match(query, clean_nyaa.strip() or item_title):
+                            continue
+
+                        # Magnet link
+                        magnet_a = tds[2].find("a", href=re.compile(r'^magnet:', re.I))
+                        if not magnet_a:
+                            torrent_a = tds[2].find("a", href=re.compile(r'\.torrent$', re.I))
+                            target_url = f"{mirror}{torrent_a['href']}" if torrent_a and torrent_a['href'].startswith("/") else (torrent_a['href'] if torrent_a else "")
+                        else:
+                            target_url = magnet_a["href"]
+
+                        if not target_url:
+                            continue
+
+                        size_val = tds[3].get_text(strip=True)
+                        seeders_val = tds[5].get_text(strip=True)
+
+                        # Anime episode and season detection
+                        s_num = None
+                        e_num = None
+
+                        se_m = re.search(r'\bS(\d{1,2})\s*[-._ ]?E(\d{1,3})\b', item_title, re.I)
+                        if se_m:
+                            s_num = int(se_m.group(1))
+                            e_num = int(se_m.group(2))
+                        else:
+                            ord_m = re.search(r'\b(\d{1,2})(?:st|nd|rd|th)\s+season\b', item_title, re.I)
+                            if ord_m:
+                                s_num = int(ord_m.group(1))
+                            else:
+                                s_m = re.search(r'\b(?:Season|S)\s*0*(\d{1,2})\b', item_title, re.I)
+                                if s_m:
+                                    s_num = int(s_m.group(1))
+                                elif season is not None:
+                                    s_num = season
+                                else:
+                                    s_num = 1
+
+                            ep_m = re.search(r'(?:[-_ ]\s*0*(\d{1,3})\s*(?:v\d+)?\s*(?:\[|\(|\.|$))|\b(?:Episode|Ep|E)[-\s]*0*(\d{1,3})\b', item_title, re.I)
+                            if ep_m:
+                                e_num = int(ep_m.group(1) or ep_m.group(2))
+
+                        is_batch_kw = any(k in item_title.lower() for k in ["[batch]", "(batch)", "complete series", "complete season", "all episodes", "batch release", "batch pack", "vol."])
+                        is_range = bool(re.search(r'\b(?:episodes?|ep|e)?\s*\d+\s*[-~]\s*\d+\b', item_title, re.I))
+                        if is_range:
+                            range_m = re.search(r'\b(?:episodes?|ep|e)?\s*\d+\s*[-~]\s*\d+\b', item_title, re.I)
+                            range_prefix = item_title[:range_m.start()].rstrip()
+                            if re.search(r'\b(?:season|s)\b$', range_prefix, re.I):
+                                is_range = False
+
+                        if season is not None and s_num != season:
+                            continue
+
+                        if episode is not None:
+                            if is_batch_kw or is_range or e_num is None or e_num != episode:
+                                continue
                             ep_tag = f"S{s_num:02d}E{e_num:02d}"
                             is_batch = False
-                        elif is_batch_kw or is_range:
-                            ep_tag = f"S{s_num:02d} Batch"
-                            is_batch = True
                         else:
-                            ep_tag = f"S{s_num:02d}" if "season" in item_title.lower() else ""
-                            is_batch = False
+                            if e_num is not None and not (is_batch_kw or is_range):
+                                ep_tag = f"S{s_num:02d}E{e_num:02d}"
+                                is_batch = False
+                            elif is_batch_kw or is_range:
+                                ep_tag = f"S{s_num:02d} Batch"
+                                is_batch = True
+                            else:
+                                ep_tag = f"S{s_num:02d}" if "season" in item_title.lower() else ""
+                                is_batch = False
 
-                    # Resolution
-                    res_m = re.search(r'(2160p|4K|1080p|720p|480p)', item_title, re.I)
-                    detected_res = res_m.group(1).upper() if res_m else "1080P"
-                    if detected_res == "4K":
-                        detected_res = "2160P"
+                        # Resolution
+                        res_m = re.search(r'(2160p|4K|1080p|720p|480p)', item_title, re.I)
+                        detected_res = res_m.group(1).upper() if res_m else "1080P"
+                        if detected_res == "4K":
+                            detected_res = "2160P"
 
-                    # Codec
-                    codec = "HEVC" if any(k in item_title.upper() for k in ["HEVC", "X265", "10BIT"]) else ("AV1" if "AV1" in item_title.upper() else "x264")
+                        # Codec
+                        codec = "HEVC" if any(k in item_title.upper() for k in ["HEVC", "X265", "10BIT"]) else ("AV1" if "AV1" in item_title.upper() else "x264")
 
-                    results.append({
-                        "platform": "Nyaa",
-                        "title": item_title,
-                        "label": f"Nyaa | [{detected_res}] {ep_tag} ({size_val}, {seeders_val} seeders)".strip(),
-                        "episode_tag": ep_tag,
-                        "resolution": detected_res,
-                        "codec": codec,
-                        "size": size_val,
-                        "audio": "Japanese / Multi" if "multi" in item_title.lower() or "dual" in item_title.lower() else "Original",
-                        "target_url": target_url,
-                        "is_batch": is_batch,
-                        "source_id": "nyaa_torrent"
-                    })
-            else:
-                await self.domain_resolver.report_failure("nyaa", url)
-        except Exception:
-            await self.domain_resolver.report_failure("nyaa", url)
+                        sub_results.append({
+                            "platform": "Nyaa",
+                            "title": item_title,
+                            "label": f"Nyaa | [{detected_res}] {ep_tag} ({size_val}, {seeders_val} seeders)".strip(),
+                            "episode_tag": ep_tag,
+                            "resolution": detected_res,
+                            "codec": codec,
+                            "size": size_val,
+                            "seeders": seeders_val,
+                            "audio": "Japanese / Multi" if "multi" in item_title.lower() or "dual" in item_title.lower() else "Original",
+                            "target_url": target_url,
+                            "is_batch": is_batch,
+                            "source_id": "nyaa_torrent"
+                        })
+                elif resp.status_code >= 500:
+                    await self.domain_resolver.report_failure("nyaa", url)
+            except httpx.ConnectError:
+                pass
+            except Exception:
+                pass
+
+            return sub_results
+
+        tasks = [fetch_nyaa_query(qc) for qc in candidate_queries]
+        gathered = await asyncio.gather(*tasks, return_exceptions=True)
+        for res_list in gathered:
+            if isinstance(res_list, list):
+                for item in res_list:
+                    mag = item.get("target_url")
+                    if mag and mag not in seen_magnets:
+                        seen_magnets.add(mag)
+                        results.append(item)
+
+        if not results and fallback_query and fallback_query not in candidate_queries:
+            fallback_res = await fetch_nyaa_query(fallback_query)
+            for item in fallback_res:
+                mag = item.get("target_url")
+                if mag and mag not in seen_magnets:
+                    seen_magnets.add(mag)
+                    results.append(item)
 
         return results
 
-    async def search_bingr(self, client: httpx.AsyncClient, query: str, season: Optional[int] = None, episode: Optional[int] = None) -> list:
+    async def search_bingr(self, client: httpx.AsyncClient, query: str, season: Optional[int] = None, episode: Optional[int] = None, tmdb_id: Optional[str] = None) -> list:
         """Fast search & embed streaming endpoint generation on Bingr (< 300ms)."""
         clean = query.strip()
         mirror = await self.domain_resolver.get_mirror("bingr")
@@ -1715,8 +1768,8 @@ class FastScrapers:
                     if not item_title or not is_strict_match(query, item_title):
                         continue
 
-                    tmdb_id = item.get("id")
-                    if not tmdb_id:
+                    found_tmdb_id = item.get("id")
+                    if not found_tmdb_id:
                         continue
 
                     media_type = item.get("type") or ("tv" if season is not None or episode is not None else "movie")
@@ -1728,16 +1781,16 @@ class FastScrapers:
                         ep_tag = f"S{s:02d}E{e:02d}"
 
                         embeds = [
-                            ("FilmU Embed (HLS)", f"https://embed.filmu.in/tv/{tmdb_id}/{s}/{e}"),
-                            ("Cinezo Player", f"https://player.cinezo.live/embed/tv/{tmdb_id}/{s}/{e}"),
-                            ("Vidbolt Stream", f"https://vidbolt.xyz/tv/{tmdb_id}/{s}/{e}")
+                            ("FilmU Embed (HLS)", f"https://embed.filmu.in/tv/{found_tmdb_id}/{s}/{e}"),
+                            ("Cinezo Player", f"https://player.cinezo.live/embed/tv/{found_tmdb_id}/{s}/{e}"),
+                            ("Vidbolt Stream", f"https://vidbolt.xyz/tv/{found_tmdb_id}/{s}/{e}")
                         ]
                     else:
                         ep_tag = ""
                         embeds = [
-                            ("FilmU Embed (HLS)", f"https://embed.filmu.in/movie/{tmdb_id}"),
-                            ("Cinezo Player", f"https://player.cinezo.live/embed/movie/{tmdb_id}"),
-                            ("Vidbolt Stream", f"https://vidbolt.xyz/movie/{tmdb_id}")
+                            ("FilmU Embed (HLS)", f"https://embed.filmu.in/movie/{found_tmdb_id}"),
+                            ("Cinezo Player", f"https://player.cinezo.live/embed/movie/{found_tmdb_id}"),
+                            ("Vidbolt Stream", f"https://vidbolt.xyz/movie/{found_tmdb_id}")
                         ]
 
                     for source_name, embed_url in embeds:
@@ -1747,6 +1800,7 @@ class FastScrapers:
                             "label": f"Bingr | [1080P] {ep_tag} {source_name}".strip(),
                             "episode_tag": ep_tag,
                             "resolution": "1080P",
+                            "quality": "1080P",
                             "codec": "H.264",
                             "size": "Stream",
                             "audio": "Multi Audio",
@@ -1759,9 +1813,35 @@ class FastScrapers:
         except Exception:
             await self.domain_resolver.report_failure("bingr", api_url)
 
+        # Fallback if search returns 0 results but tmdb_id is supplied
+        if not results and tmdb_id:
+            s = season if season is not None else 1
+            e = episode if episode is not None else 1
+            ep_tag = f"S{s:02d}E{e:02d}"
+            embeds = [
+                ("FilmU Embed (HLS)", f"https://embed.filmu.in/tv/{tmdb_id}/{s}/{e}"),
+                ("Cinezo Player", f"https://player.cinezo.live/embed/tv/{tmdb_id}/{s}/{e}"),
+                ("Vidbolt Stream", f"https://vidbolt.xyz/tv/{tmdb_id}/{s}/{e}")
+            ]
+            for source_name, embed_url in embeds:
+                results.append({
+                    "platform": "Bingr",
+                    "title": clean,
+                    "label": f"Bingr | [1080P] {ep_tag} {source_name}".strip(),
+                    "episode_tag": ep_tag,
+                    "resolution": "1080P",
+                    "quality": "1080P",
+                    "codec": "H.264",
+                    "size": "Stream",
+                    "audio": "Multi Audio",
+                    "target_url": embed_url,
+                    "is_batch": False,
+                    "source_id": "bingr_embed"
+                })
+
         return results
 
-    async def search_all_concurrent(self, query: str, priority_platform: str = "UHDMovies", season: Optional[int] = None, episode: Optional[int] = None) -> list:
+    async def search_all_concurrent(self, query: str, priority_platform: str = "UHDMovies", season: Optional[int] = None, episode: Optional[int] = None, tmdb_id: Optional[str] = None) -> list:
         """Search across all 9 platforms concurrently in parallel (< 800ms)."""
         async with httpx.AsyncClient(http2=True, limits=self.limits, follow_redirects=True) as client:
             t_uhd = self.search_uhdmovies(client, query, season=season, episode=episode)
@@ -1772,7 +1852,7 @@ class FastScrapers:
             t_desire = self.search_desiremovies(client, query, season=season, episode=episode)
             t_ddl = self.search_ddlbase(client, query, season=season, episode=episode)
             t_nyaa = self.search_nyaa(client, query, season=season, episode=episode)
-            t_bingr = self.search_bingr(client, query, season=season, episode=episode)
+            t_bingr = self.search_bingr(client, query, season=season, episode=episode, tmdb_id=tmdb_id)
 
             task_results = await asyncio.gather(
                 t_uhd, t_4khd, t_hdh, t_vega, t_ola, t_desire, t_ddl, t_nyaa, t_bingr,

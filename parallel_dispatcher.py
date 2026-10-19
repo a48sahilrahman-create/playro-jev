@@ -59,6 +59,8 @@ DEFAULT_HEADERS = {
 
 def clean_media_title(raw_title: str) -> str:
     """Removes website noise from title."""
+    # Strip leading release group tag if present e.g. [SubsPlease], [Erai-raws], [Judas]
+    raw_title = re.sub(r'^\s*\[[^\]]+\]\s*', '', raw_title)
     noise = (
         r'\b(Download|Full Movie|Watch Online|Direct Link|ESubs|Multi Audio|Dual Audio|ORG 5\.1|'
         r'WEB-DL|WEBRip|BluRay|HDRip|DVDRip|\d{3,4}p|2160p|4K|1080p|720p|480p|Restored|'
@@ -159,6 +161,13 @@ def is_strict_match(query: str, candidate_title: str) -> bool:
 
     if q_str == c_str:
         return True
+
+    # Candidate lead token matching (candidate title starts with full query tokens)
+    # Handles anime titles where release group was stripped and episodic/batch tokens follow
+    # (e.g. "Bleach" in "Bleach - 366", "Frieren" in "Frieren - Beyond Journey's End", "Dandadan" in "Dandadan - 01")
+    if q_no_y_tokens and len(c_no_y_tokens) >= len(q_no_y_tokens):
+        if c_no_y_tokens[:len(q_no_y_tokens)] == q_no_y_tokens:
+            return True
 
     def _is_token_subsequence(sub: list, full: list) -> bool:
         """Checks if sub appears as a contiguous subsequence in full."""
@@ -297,7 +306,7 @@ class _FastScraperFleetAdapter:
     def __init__(self, raw_fs):
         self._fs = raw_fs
 
-    async def _execute(self, method_name: str, platform_tag: str, client: httpx.AsyncClient, query: str, season: Optional[int] = None, episode: Optional[int] = None) -> list:
+    async def _execute(self, method_name: str, platform_tag: str, client: httpx.AsyncClient, query: str, season: Optional[int] = None, episode: Optional[int] = None, tmdb_id: Optional[str] = None) -> list:
         method = getattr(self._fs, method_name, None)
         if method is None:
             if method_name == "search_4khdhub" and hasattr(self._fs, "search_hdhub4u"):
@@ -305,7 +314,13 @@ class _FastScraperFleetAdapter:
             else:
                 return []
         try:
-            results = await method(client, query, season=season, episode=episode)
+            if tmdb_id is not None:
+                try:
+                    results = await method(client, query, season=season, episode=episode, tmdb_id=tmdb_id)
+                except TypeError:
+                    results = await method(client, query, season=season, episode=episode)
+            else:
+                results = await method(client, query, season=season, episode=episode)
         except TypeError:
             results = await method(client, query)
 
@@ -344,8 +359,8 @@ class _FastScraperFleetAdapter:
     async def search_nyaa(self, client: httpx.AsyncClient, query: str, season: Optional[int] = None, episode: Optional[int] = None) -> list:
         return await self._execute("search_nyaa", "Nyaa", client, query, season=season, episode=episode)
 
-    async def search_bingr(self, client: httpx.AsyncClient, query: str, season: Optional[int] = None, episode: Optional[int] = None) -> list:
-        return await self._execute("search_bingr", "Bingr", client, query, season=season, episode=episode)
+    async def search_bingr(self, client: httpx.AsyncClient, query: str, season: Optional[int] = None, episode: Optional[int] = None, tmdb_id: Optional[str] = None) -> list:
+        return await self._execute("search_bingr", "Bingr", client, query, season=season, episode=episode, tmdb_id=tmdb_id)
 
     def __getattr__(self, name):
         return getattr(self._fs, name)
@@ -615,7 +630,7 @@ class ParallelMediaDispatcher:
             }
         return {}
 
-    async def stream_all_parallel(self, query: str, season: Optional[int] = None, episode: Optional[int] = None):
+    async def stream_all_parallel(self, query: str, season: Optional[int] = None, episode: Optional[int] = None, tmdb_id: Optional[str] = None):
         """Simultaneous multi-source stream generator with series-first detection.
 
         Every source is wrapped in a per-source timeout so a single hung scraper
@@ -638,7 +653,7 @@ class ParallelMediaDispatcher:
                 fs.search_desiremovies(client, query, season=season, episode=episode),
                 fs.search_ddlbase(client, query, season=season, episode=episode),
                 fs.search_nyaa(client, query, season=season, episode=episode),
-                fs.search_bingr(client, query, season=season, episode=episode),
+                fs.search_bingr(client, query, season=season, episode=episode, tmdb_id=tmdb_id),
                 self.fetch_local_db(query)
             ]
 

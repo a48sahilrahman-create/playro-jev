@@ -44,7 +44,7 @@ from auth_bridge import InteractiveAuthBridge
 from addon_manager import AddonManager
 from audio_probe import probe_audio_streams, find_ffmpeg
 from audio_transcoder import stream_transcoded_media
-from hls_transmuxer import HLS_SESSION_MANAGER
+from hls_transmuxer import HLSSessionManager, HLS_SESSION_MANAGER
 from cascade_resolver import resolve_stream_cascade, cascade_search_and_resolve
 from embed_engine import EmbedEngine
 
@@ -528,12 +528,18 @@ async def get_streams(
             year = meta.get("year")
 
         # 2. Search Multi-Source Parallel Fleet (Local DB, Vega, UHD, HDHub4u, Ola, TG, YT)
+        tmdb_id_for_search = None
+        if clean_imdb_id.startswith("tmdb:"):
+            tmdb_id_for_search = clean_imdb_id.split(":")[1]
+        elif target_id.startswith("tmdb:"):
+            tmdb_id_for_search = target_id.split(":")[1]
+
         search_query = f"{title} {year}" if year else title
-        search_result = await play_engine.search(title if (season is not None) else search_query, season=season, episode=episode)
+        search_result = await play_engine.search(title if (season is not None) else search_query, season=season, episode=episode, tmdb_id=tmdb_id_for_search)
         releases = search_result.get("releases", []) if isinstance(search_result, dict) else []
 
         if not releases and title != search_query:
-            search_result = await play_engine.search(title, season=season, episode=episode)
+            search_result = await play_engine.search(title, season=season, episode=episode, tmdb_id=tmdb_id_for_search)
             releases = search_result.get("releases", []) if isinstance(search_result, dict) else []
 
         if releases and season is not None and episode is not None:
@@ -692,7 +698,10 @@ def filter_episode_streams(releases: list, season: int, episode: int) -> list:
     - Matches exact S{s_num}E{e_num} in episode_tag or label.
     - Matches Episode {e_num} in label.
     - Matches direct S{s_num}E{e_num} in title.
-    - Returns ONLY matched releases (never return batch zips or whole season packs). If matched is empty, return [] (or safe_fallback filtered for non-batch).
+    - Preserves synthetic tags like S01E01 created by Nyaa or other scrapers.
+    - In Step 1: has_exact_ep check prevents legitimate single episode streams from being discarded.
+    - Verifies that magnet links (target_url.startswith("magnet:")) are preserved with direct_url = target_url so they can be parsed or displayed.
+    - Returns ONLY matched releases (never return batch zips or whole season packs). If matched is empty, return [].
     """
     s_num = int(season)
     e_num = int(episode)
@@ -711,15 +720,31 @@ def filter_episode_streams(releases: list, season: int, episode: int) -> list:
         label = (r.get("label") or "").strip()
         title = (r.get("title") or "").strip()
         ep_tag = (r.get("episode_tag") or "").strip()
+        target_url = (r.get("target_url") or r.get("direct_url") or "").strip()
 
-        # 1. Reject explicit batch/zip
-        if r.get("is_batch") is True:
-            continue
-        if re.search(batch_kw_pattern, label, re.I) or re.search(batch_kw_pattern, ep_tag, re.I):
-            continue
-        has_exact_ep = bool(re.search(exact_se_pat, ep_tag, re.I) or re.search(exact_se_pat, label, re.I) or re.search(exact_ep_in_lbl, label, re.I))
-        if not has_exact_ep and re.search(batch_kw_pattern, title, re.I):
-            continue
+        # Check for exact episode match across episode_tag, label, and title
+        has_exact_ep = bool(
+            re.search(exact_se_pat, ep_tag, re.I) or
+            re.search(exact_se_pat, label, re.I) or
+            re.search(exact_se_pat, title, re.I) or
+            re.search(rf'\b{s_num}x0*{e_num}\b', title, re.I) or
+            re.search(exact_ep_in_lbl, label, re.I)
+        )
+
+        # 1. Reject explicit batch/zip, but ensure has_exact_ep check prevents legitimate single episode streams from being discarded
+        if not has_exact_ep:
+            if r.get("is_batch") is True:
+                continue
+            if re.search(batch_kw_pattern, label, re.I) or re.search(batch_kw_pattern, ep_tag, re.I) or re.search(batch_kw_pattern, title, re.I):
+                continue
+        else:
+            # If has_exact_ep is matched, ensure it's not actually a multi-episode range pack (e.g. E01-E12, S01E01-E08)
+            is_range = bool(
+                re.search(rf'\b(?:episodes?|ep|e)?\s*0*{e_num}\s*[-~]\s*\d+\b', f"{label} {title}", re.I) or
+                re.search(rf'\bs0*{s_num}\s*e0*{e_num}\s*[-~]\s*e?\d+\b', f"{label} {title}", re.I)
+            )
+            if is_range:
+                continue
 
         # 2. Rejects any release if label contains a conflicting season (e.g. S02, S03, S04 when looking for Season 1)
         lbl_seasons = re.findall(r'\b(?:season|s)\s*0*(\d{1,2})\b', label, re.I)
@@ -735,19 +760,28 @@ def filter_episode_streams(releases: list, season: int, episode: int) -> list:
             continue
 
         # 3. Match exact episode
-        is_matched = False
-
-        # Matches exact S{s_num}E{e_num} in episode_tag or label
-        if re.search(exact_se_pat, ep_tag, re.I) or re.search(exact_se_pat, label, re.I):
-            is_matched = True
-        # Matches Episode {e_num} in label
-        elif re.search(exact_ep_in_lbl, label, re.I):
-            is_matched = True
-        # Matches direct S{s_num}E{e_num} in title
-        elif re.search(exact_se_pat, title, re.I) or re.search(rf'\b{s_num}x0*{e_num}\b', title, re.I):
-            is_matched = True
+        is_matched = has_exact_ep
+        if not is_matched:
+            # Matches exact S{s_num}E{e_num} in episode_tag or label
+            if re.search(exact_se_pat, ep_tag, re.I) or re.search(exact_se_pat, label, re.I):
+                is_matched = True
+            # Matches Episode {e_num} in label
+            elif re.search(exact_ep_in_lbl, label, re.I):
+                is_matched = True
+            # Matches direct S{s_num}E{e_num} in title
+            elif re.search(exact_se_pat, title, re.I) or re.search(rf'\b{s_num}x0*{e_num}\b', title, re.I):
+                is_matched = True
 
         if is_matched:
+            # Ensure synthetic tags like S01E01 created by Nyaa or other scrapers are preserved and matched
+            if not r.get("episode_tag"):
+                r["episode_tag"] = f"S{s_num:02d}E{e_num:02d}"
+
+            # Verify that magnet links (target_url.startswith("magnet:")) are preserved with direct_url = target_url
+            if target_url.startswith("magnet:"):
+                r["direct_url"] = target_url
+                r["target_url"] = target_url
+
             matching.append(r)
 
     # Strictly enforce Zero-Leak policy: Never leak batch packs or non-matching episodes
@@ -765,6 +799,7 @@ async def api_search_media(
     episode: Optional[int] = None,
     year: Optional[str] = None,
     imdb_id: Optional[str] = None,
+    tmdb_id: Optional[str] = None,
     refresh: bool = False
 ):
     """
@@ -775,6 +810,16 @@ async def api_search_media(
         return JSONResponse({"query": "", "meta": {}, "releases": []})
 
     raw_q = q.strip()
+
+    # Resolve tmdb_id if available from request, imdb_id (e.g. tmdb:12345), or query
+    resolved_tmdb_id = tmdb_id
+    if not resolved_tmdb_id:
+        if imdb_id and str(imdb_id).startswith("tmdb:"):
+            resolved_tmdb_id = str(imdb_id).replace("tmdb:", "").strip().split(":")[0]
+        elif raw_q and str(raw_q).startswith("tmdb:"):
+            tmdb_m = re.search(r'tmdb:(\d+)', str(raw_q))
+            if tmdb_m:
+                resolved_tmdb_id = tmdb_m.group(1)
 
     # Extract base show title if query contains season/episode tokens (e.g. "The Boys S01E01" -> "The Boys")
     base_show_title = re.sub(r'\b(s\d+\s*e\d+|s\d+|season\s*\d+|episode\s*\d+|e\d+|ep\d+|\d+x\d+)\b.*', '', raw_q, flags=re.I).strip()
@@ -801,6 +846,8 @@ async def api_search_media(
         cache_key = f"{cache_key}_{year}"
     if imdb_id:
         cache_key = f"{imdb_id}_{cache_key}"
+    if resolved_tmdb_id:
+        cache_key = f"tmdb{resolved_tmdb_id}_{cache_key}"
 
     # 1. Check in-memory stream cache
     if not refresh:
@@ -812,7 +859,14 @@ async def api_search_media(
     is_series_request = type == "series" or season is not None
     clean_search_query = base_show_title if is_series_request else raw_q
 
-    search_task = play_engine.search(clean_search_query, year=year, imdb_id=imdb_id, season=season, episode=episode)
+    search_task = play_engine.search(
+        clean_search_query,
+        year=year,
+        imdb_id=imdb_id,
+        season=season,
+        episode=episode,
+        tmdb_id=resolved_tmdb_id
+    )
     tmdb_task = fetch_tmdb_meta(
         base_show_title,
         media_type="series" if is_series_request else type,
@@ -837,8 +891,11 @@ async def api_search_media(
     if releases:
         releases.sort(key=lambda r: rank_release(r), reverse=True)
 
-    # Attach poster to releases if missing
+    # Attach poster to releases if missing and ensure magnet links preserve direct_url
     for r in releases:
+        t_url = r.get("target_url") or ""
+        if t_url.startswith("magnet:") and not r.get("direct_url"):
+            r["direct_url"] = t_url
         if not r.get("poster") and tmdb_meta.get("poster"):
             r["poster"] = tmdb_meta["poster"]
 
@@ -849,6 +906,7 @@ async def api_search_media(
         "episode": episode,
         "year": year,
         "imdb_id": imdb_id,
+        "tmdb_id": resolved_tmdb_id or (meta_obj.get("id") if str(meta_obj.get("id", "")).isdigit() else None),
         "meta": meta_obj,
         "releases": releases
     }
@@ -1377,7 +1435,7 @@ async def api_vlc_play(
                     # Stream Verification Lock: Refuse to launch raw gateway URLs or unverified HTML pages into VLC
                     candidate_stream = resolved_res.get("direct_url") or raw_url
                     is_gateway = any(gw in candidate_stream.lower() for gw in ["greenmotors", "hdstream4u", "driveseed", "unblockedgames", "thenaukriadda", "video-seed", "video-gen", "gadgetsweb", "duplichecker", "homelander", "hubcloud.ist/drive", "hubcloud.fans/drive"])
-                    is_media = any(ext in candidate_stream.lower() for ext in [".mkv", ".mp4", ".ts", ".m3u8", ".webm", ".avi", "r2.cloudflarestorage", "pixeldrain", "workers.dev"]) or candidate_stream.startswith("http://127.0.0.1") or candidate_stream.startswith("http://localhost")
+                    is_media = any(ext in candidate_stream.lower() for ext in [".mkv", ".mp4", ".ts", ".m3u8", ".webm", ".avi", "r2.cloudflarestorage", "pixeldrain"]) or candidate_stream.startswith("http://127.0.0.1") or candidate_stream.startswith("http://localhost")
                     if is_gateway or not is_media:
                         return JSONResponse({
                             "status": "ERROR",
@@ -1395,12 +1453,27 @@ async def api_vlc_play(
 
     # Final Stream Verification Gate: Refuse to spawn VLC on raw gateway HTML pages
     is_gw = any(gw in final_stream_url.lower() for gw in ["greenmotors", "hdstream4u", "driveseed", "unblockedgames", "thenaukriadda", "video-seed", "video-gen", "gadgetsweb", "duplichecker", "homelander"])
-    is_direct_media = any(ext in final_stream_url.lower() for ext in [".mkv", ".mp4", ".ts", ".m3u8", ".webm", ".avi", "r2.cloudflarestorage", "pixeldrain", "workers.dev"]) or final_stream_url.startswith("http://127.0.0.1") or final_stream_url.startswith("http://localhost")
+    is_direct_media = any(ext in final_stream_url.lower() for ext in [".mkv", ".mp4", ".ts", ".m3u8", ".webm", ".avi", "r2.cloudflarestorage", "pixeldrain"]) or final_stream_url.startswith("http://127.0.0.1") or final_stream_url.startswith("http://localhost")
     if is_gw and not is_direct_media:
         return JSONResponse({
             "status": "ERROR",
             "error": "Stream Verification Lock: Cannot launch raw gateway webpage in VLC player. Direct media resolution required.",
             "target_url": raw_url
+        }, status_code=400)
+
+    # Verify stream validity before launching VLC player
+    try:
+        if hasattr(stream_verifier, "verify"):
+            verify_res = await stream_verifier.verify(final_stream_url)
+        else:
+            verify_res = await StreamVerifier().verify(final_stream_url)
+    except Exception as e:
+        verify_res = {"valid": False, "error": str(e)}
+
+    if not verify_res or not isinstance(verify_res, dict) or not verify_res.get("valid"):
+        return JSONResponse({
+            "status": "ERROR",
+            "error": "Stream verification failed: media file is unavailable or quota exceeded"
         }, status_code=400)
 
     # Launch VLC on Windows / Linux / macOS for the EXACT resolved stream
@@ -1412,6 +1485,16 @@ async def api_vlc_play(
             flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
 
         vlc_args = [vlc_bin, final_stream_url, f":meta-title={title}", "--no-video-title-show"]
+
+        # When spawning VLC on supported CDN/worker links, inject user-agent and referrer
+        is_worker_or_cdn = any(k in final_stream_url.lower() for k in [
+            "workers.dev", "pages.dev", "r2.cloudflarestorage", "pixeldrain", "hubcloud"
+        ])
+        if is_worker_or_cdn:
+            vlc_ua = DEFAULT_HTTP_HEADERS.get("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
+            vlc_ref = raw_url if raw_url else final_stream_url
+            vlc_args.extend([f":http-user-agent={vlc_ua}", f":http-referrer={vlc_ref}"])
+
         if start_time and start_time > 0:
             vlc_args.append(f"--start-time={int(start_time)}")
         if audio_track is not None:
@@ -1772,7 +1855,7 @@ async def api_hls_master(
     request: Request,
     url: str,
     track: int = 0,
-    boost: float = 1.0
+    boost: float = 0.0
 ):
     """
     Dynamic VOD HLS Master Manifest Generator:
@@ -1782,8 +1865,13 @@ async def api_hls_master(
     if not raw_url:
         raise HTTPException(status_code=400, detail="Missing media target URL")
 
+    effective_boost = boost if boost > 0.0 else 1.0
     base_url = str(request.base_url).rstrip("/")
-    session = await HLS_SESSION_MANAGER.get_or_create_session(raw_url, audio_track=track, volume_boost=boost)
+    try:
+        session = await HLS_SESSION_MANAGER.get_or_create_session(raw_url, audio_track=track, volume_boost=effective_boost)
+    except TypeError:
+        session = await HLSSessionManager.get_or_create_session(raw_url, audio_track=track, volume_boost=effective_boost)
+
     return Response(
         content=session.generate_master_manifest(base_url),
         media_type="application/vnd.apple.mpegurl"
@@ -1791,13 +1879,16 @@ async def api_hls_master(
 
 
 @app.get("/api/hls/{session_id}/index.m3u8")
-async def api_hls_media_playlist(request: Request, session_id: str):
+async def api_hls_media_playlist(request: Request, session_id: str, track: int = 0):
     """
     RFC 8216 compliant VOD HLS media playlist generator for active session.
     """
     session = HLS_SESSION_MANAGER.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="HLS session not found")
+
+    if track != 0 and session.audio_track != track:
+        session.audio_track = track
 
     base_url = f"{str(request.base_url).rstrip('/')}/api/hls/{session_id}"
     return Response(
@@ -1806,8 +1897,8 @@ async def api_hls_media_playlist(request: Request, session_id: str):
     )
 
 
-@app.get("/api/hls/{session_id}/segment_{segment_idx}.ts")
-async def api_hls_segment(session_id: str, segment_idx: int):
+@app.get("/api/hls/{session_id}/segment_{idx}.ts")
+async def api_hls_segment(session_id: str, idx: int, track: int = 0, boost: float = 0.0):
     """
     Dynamic MPEG-TS slice provider:
     Retrieves from LRU cache or slices on-the-fly via FFmpeg.
@@ -1816,7 +1907,12 @@ async def api_hls_segment(session_id: str, segment_idx: int):
     if not session:
         raise HTTPException(status_code=404, detail="HLS session not found")
 
-    data = await session.get_or_generate_segment(segment_idx)
+    if track != 0 and session.audio_track != track:
+        session.audio_track = track
+    if boost > 0.0 and session.volume_boost != boost:
+        session.volume_boost = boost
+
+    data = await session.get_or_generate_segment(idx)
     return Response(
         content=data,
         media_type="video/mp2t",
@@ -1830,13 +1926,21 @@ async def api_hls_segment(session_id: str, segment_idx: int):
 @app.get("/api/hls/{session_id}/status")
 async def api_hls_status(session_id: str):
     """
-    Returns active HLS session telemetry, health, duration, audio track, and segment count.
+    Returns active HLS session telemetry, health, duration, audio track, segment count, codecs, and cached segments.
     """
     session = HLS_SESSION_MANAGER.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="HLS session not found")
 
     total_segments = max(1, math.ceil(session.duration / session.segment_duration))
+
+    cached_count = 0
+    if hasattr(session, "cache") and hasattr(session.cache, "_cache"):
+        prefix = f"{session.session_id}:"
+        cached_count = sum(1 for k in session.cache._cache if k.startswith(prefix))
+
+    codecs = ["aac"] if session.is_audio_aac else ["copy"]
+
     return JSONResponse({
         "session_id": session.session_id,
         "health": "healthy",
@@ -1847,23 +1951,75 @@ async def api_hls_status(session_id: str):
         "segment_count": total_segments,
         "segment_duration": session.segment_duration,
         "is_audio_aac": session.is_audio_aac,
+        "cached_segments": cached_count,
+        "codecs": codecs,
         "created_at": session.created_at,
         "last_accessed": session.last_accessed
     })
 
 
+@app.post("/api/playback/cascade")
+async def api_playback_cascade_post(request: Request):
+    """
+    POST /api/playback/cascade:
+    Accepts JSON body: { "candidates": [...] }
+    Returns cascade result (primary, waterfall, embed_fallback).
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    candidates = []
+    if isinstance(body, dict):
+        candidates = body.get("candidates", [])
+    elif isinstance(body, list):
+        candidates = body
+
+    if not isinstance(candidates, list):
+        candidates = []
+
+    res = await resolve_stream_cascade(candidates)
+
+    title = body.get("title") or (candidates[0].get("title") if candidates and isinstance(candidates[0], dict) else "")
+    imdb_id = body.get("imdb_id") or (candidates[0].get("imdb_id") if candidates and isinstance(candidates[0], dict) else "")
+    season = body.get("season")
+    episode = body.get("episode")
+    item_id = imdb_id or title
+    embed_fallback = None
+    if item_id:
+        try:
+            media_type = "tv" if (season is not None or episode is not None) else "movie"
+            embed_fallback = EmbedEngine.get_preferred_embed(
+                media_type=media_type,
+                item_id=str(item_id),
+                season=season,
+                episode=episode
+            )
+        except Exception:
+            embed_fallback = None
+
+    res["embed_fallback"] = embed_fallback
+    return JSONResponse(res)
+
+
 @app.get("/api/playback/cascade")
 async def api_playback_cascade(
-    q: str = "",
-    type: str = "movie",
+    title: Optional[str] = None,
+    q: Optional[str] = None,
+    year: Optional[str] = None,
     season: Optional[int] = None,
     episode: Optional[int] = None,
-    imdb_id: Optional[str] = None
+    imdb_id: Optional[str] = None,
+    type: str = "movie"
 ):
     """
-    Cascading stream resolver with parallel TTFB benchmarking and waterfall fallback.
+    GET /api/playback/cascade:
+    Accepts title, year, season, episode (also q, imdb_id, type).
+    Queries dispatchers/play_engine and runs cascading parallel resolution.
+    Returns primary, waterfall, embed_fallback.
     """
-    clean_q = (q or "").strip()
+    clean_q = (title or q or "").strip()
     if not clean_q and imdb_id:
         clean_q = imdb_id.strip()
 
@@ -1872,12 +2028,13 @@ async def api_playback_cascade(
             "status": "NO_STREAMS",
             "primary": None,
             "waterfall": [],
-            "candidates_tested": 0
+            "candidates_tested": 0,
+            "embed_fallback": None
         })
 
     try:
         if imdb_id:
-            search_res = await play_engine.search(clean_q, imdb_id=imdb_id, season=season, episode=episode)
+            search_res = await play_engine.search(clean_q, imdb_id=imdb_id, year=year, season=season, episode=episode)
             candidates = search_res.get("releases", []) if isinstance(search_res, dict) else (search_res if isinstance(search_res, list) else [])
             res = await resolve_stream_cascade(candidates)
         else:
@@ -1888,6 +2045,19 @@ async def api_playback_cascade(
                 episode=episode,
                 engine=play_engine
             )
+
+        media_type = "tv" if (season is not None or episode is not None) else type
+        item_id = imdb_id or clean_q
+        try:
+            res["embed_fallback"] = EmbedEngine.get_preferred_embed(
+                media_type=media_type,
+                item_id=str(item_id),
+                season=season,
+                episode=episode
+            )
+        except Exception:
+            res["embed_fallback"] = None
+
         return JSONResponse(res)
     except Exception as e:
         print(f"[Cascade API Error] {e}")
@@ -1896,34 +2066,43 @@ async def api_playback_cascade(
             "error": str(e),
             "primary": None,
             "waterfall": [],
-            "candidates_tested": 0
+            "candidates_tested": 0,
+            "embed_fallback": None
         }, status_code=500)
 
 
 @app.get("/api/embed/sources")
 async def api_embed_sources(
-    type: str,
-    id: str,
+    title: Optional[str] = None,
+    imdb_id: Optional[str] = None,
+    id: Optional[str] = None,
+    type: Optional[str] = None,
     season: Optional[int] = None,
     episode: Optional[int] = None,
+    year: Optional[str] = None,
     preferred: Optional[str] = "filmu",
     start_time: Optional[float] = None
 ):
     """
     Multi-provider embed streaming source generator (Filmu, Cinezo, Vidbolt, Vidy, Vidrift).
+    Accepts title, imdb_id, season, episode, year (or id, type, preferred, start_time).
+    Returns all 5 provider embed URLs.
     """
-    clean_id = (id or "").strip()
+    clean_id = (imdb_id or id or title or "").strip()
     if not clean_id:
-        raise HTTPException(status_code=400, detail="Missing media ID")
+        raise HTTPException(status_code=400, detail="Missing media ID or title")
+
+    media_type = type or ("tv" if (season is not None or episode is not None) else "movie")
 
     res = EmbedEngine.get_preferred_embed(
-        media_type=type,
+        media_type=media_type,
         item_id=clean_id,
         season=season,
         episode=episode,
         preferred=preferred or "filmu",
         start_time=start_time
     )
+    res["sources"] = res.get("all_providers", {})
     return JSONResponse(res)
 
 if __name__ == "__main__":

@@ -3,16 +3,19 @@ Cascading Stream Resolver & Real-Time Performance Benchmarking Engine
 Features:
   1. Ultra-Low Latency Pre-Flight Benchmark (< 200ms per candidate).
   2. Staggered Parallel Racing:
-     - Dispatches top candidates sorted by rank_release with staggered launch delay (e.g. 150ms).
+     - Dispatches top candidates sorted by rank_release with staggered launch delay (150ms).
      - Benchmarks responses in parallel using asyncio.as_completed.
      - The first verified responder becomes primary.
      - Subsequent verified responders populate the waterfall fallback list sorted by TTFB.
   3. Single Candidate Verification:
      - Measures TTFB with high-precision time.perf_counter().
-     - Resolves gateway/shorteners via link_resolver.resolve_auto().
+     - Resolves gateway/shorteners via link_resolver.resolve_auto(allow_interactive=False).
      - Validates container magic bytes (MKV, MP4, HLS, TS) via stream_verifier.verify().
-     - Returns enriched metadata or None on failure.
-  4. Unified Search & Cascade Resolution Helper:
+     - Flags 403 or JSON error quota exhaustion as QUOTA_EXCEEDED.
+     - Returns enriched dict with direct_url, ttfb_ms, valid, format, candidate.
+  4. Multi-Provider Embed Fallbacks:
+     - Generates and attaches embed fallback sources via EmbedEngine.
+  5. Unified Search & Cascade Resolution Helper:
      - Directly integrates with play_engine.search() catalog output.
 """
 
@@ -68,23 +71,74 @@ def _safe_rank(release: dict) -> tuple:
         return (0, 0, 0, 0, 0)
 
 
+def _is_quota_error(val: Any) -> bool:
+    """Detect 403 status code or quota exceeded in error messages / payloads."""
+    if not val:
+        return False
+    if isinstance(val, dict):
+        if val.get("status_code") == 403 or val.get("code") == 403:
+            return True
+        for k in ("error", "reason", "message", "detail", "msg"):
+            if _is_quota_error(val.get(k)):
+                return True
+        return False
+
+    val_str = str(val).lower()
+    if "403" in val_str and any(tok in val_str for tok in ("forbidden", "quota", "status", "http", "code")):
+        return True
+
+    quota_signatures = [
+        "quota_exceeded",
+        "quota exceeded",
+        "rate limit",
+        "rate_limit",
+        "too many requests",
+        "daily quota",
+        "download quota",
+        "bandwidth limit",
+        "user rate limit exceeded",
+        "usage limit exceeded",
+    ]
+    return any(sig in val_str for sig in quota_signatures)
+
+
 async def verify_single_candidate(
     candidate: dict,
     client: Optional[httpx.AsyncClient] = None,
     timeout: float = 2.5
-) -> Optional[dict]:
+) -> dict:
     """
     Measures TTFB and verifies a single stream candidate.
-    Extracts target URL, resolves gateways via link_resolver, and verifies container magic bytes.
-    Returns enriched dict with direct_url, ttfb_ms, verified=True, format, size.
-    Returns None if resolution or verification fails.
+    Resolves raw candidate target via link_resolver.resolve_auto(target_url, allow_interactive=False).
+    Validates resolved URL using stream_verifier.verify(direct_url).
+    Measures TTFB in ms.
+    If stream returns 403 or JSON error (quota exceeded), marks status: "FAILED", reason: "QUOTA_EXCEEDED".
+    Returns: { "status": "SUCCESS" | "FAILED", "candidate": candidate, "direct_url": url, "ttfb_ms": float, "format": str, "valid": bool }
     """
     if not candidate or not isinstance(candidate, dict):
-        return None
+        return {
+            "status": "FAILED",
+            "candidate": candidate,
+            "direct_url": "",
+            "ttfb_ms": 0.0,
+            "format": "Unknown",
+            "valid": False,
+            "verified": False,
+            "reason": "INVALID_CANDIDATE",
+        }
 
     target_url = candidate.get("target_url") or candidate.get("url") or candidate.get("direct_url")
     if not target_url or not str(target_url).strip():
-        return None
+        return {
+            "status": "FAILED",
+            "candidate": candidate,
+            "direct_url": "",
+            "ttfb_ms": 0.0,
+            "format": "Unknown",
+            "valid": False,
+            "verified": False,
+            "reason": "NO_URL",
+        }
 
     target_url = str(target_url).strip()
     t0 = time.perf_counter()
@@ -99,33 +153,72 @@ async def verify_single_candidate(
         )
 
     try:
-        async def _do_verify() -> Optional[dict]:
+        async def _do_verify() -> dict:
             # Step 1: Gateway / Shortener Resolution
             try:
                 if hasattr(link_resolver, "resolve_auto"):
-                    resolve_res = await link_resolver.resolve_auto(target_url)
+                    try:
+                        resolve_res = await link_resolver.resolve_auto(target_url, allow_interactive=False)
+                    except TypeError:
+                        resolve_res = await link_resolver.resolve_auto(target_url)
                 elif hasattr(link_resolver_module, "resolve_auto"):
-                    resolve_res = await link_resolver_module.resolve_auto(target_url)
+                    try:
+                        resolve_res = await link_resolver_module.resolve_auto(target_url, allow_interactive=False)
+                    except TypeError:
+                        resolve_res = await link_resolver_module.resolve_auto(target_url)
                 else:
                     resolve_res = await resolve_auto(target_url)
             except Exception as e:
                 logger.debug(f"[Cascade] Link resolution error for {target_url}: {e}")
-                return None
+                ttfb_ms = round((time.perf_counter() - t0) * 1000, 2)
+                is_quota = _is_quota_error(e)
+                return {
+                    "status": "FAILED",
+                    "candidate": candidate,
+                    "direct_url": "",
+                    "ttfb_ms": ttfb_ms,
+                    "format": "Unknown",
+                    "valid": False,
+                    "verified": False,
+                    "reason": "QUOTA_EXCEEDED" if is_quota else "RESOLUTION_ERROR",
+                    "error": str(e)
+                }
 
+            # Check if resolution failed or returned quota error
             if isinstance(resolve_res, dict):
-                if resolve_res.get("status") == "FAILED":
-                    return None
+                is_quota = _is_quota_error(resolve_res)
+                if resolve_res.get("status") == "FAILED" or is_quota:
+                    ttfb_ms = round((time.perf_counter() - t0) * 1000, 2)
+                    return {
+                        "status": "FAILED",
+                        "candidate": candidate,
+                        "direct_url": resolve_res.get("direct_url") or "",
+                        "ttfb_ms": ttfb_ms,
+                        "format": "Unknown",
+                        "valid": False,
+                        "verified": False,
+                        "reason": "QUOTA_EXCEEDED" if is_quota else (resolve_res.get("reason") or "RESOLUTION_FAILED"),
+                        "error": resolve_res.get("error", "")
+                    }
                 resolved_url = resolve_res.get("direct_url") or resolve_res.get("url")
             elif isinstance(resolve_res, str):
                 resolved_url = resolve_res
             else:
                 resolved_url = None
 
-            direct_url = resolved_url or target_url
-            if not direct_url or not isinstance(direct_url, str) or not direct_url.strip():
-                return None
-
-            direct_url = direct_url.strip()
+            direct_url = (resolved_url or target_url).strip() if (resolved_url or target_url) else ""
+            if not direct_url:
+                ttfb_ms = round((time.perf_counter() - t0) * 1000, 2)
+                return {
+                    "status": "FAILED",
+                    "candidate": candidate,
+                    "direct_url": "",
+                    "ttfb_ms": ttfb_ms,
+                    "format": "Unknown",
+                    "valid": False,
+                    "verified": False,
+                    "reason": "NO_RESOLVED_URL"
+                }
 
             # Step 2: Container Magic Bytes Verification
             try:
@@ -137,12 +230,60 @@ async def verify_single_candidate(
                     v_res = await StreamVerifier().verify(direct_url, client=client)
             except Exception as e:
                 logger.debug(f"[Cascade] Stream verification error for {direct_url}: {e}")
-                return None
-
-            if not v_res or not isinstance(v_res, dict) or not v_res.get("valid"):
-                return None
+                ttfb_ms = round((time.perf_counter() - t0) * 1000, 2)
+                is_quota = _is_quota_error(e)
+                return {
+                    "status": "FAILED",
+                    "candidate": candidate,
+                    "direct_url": direct_url,
+                    "ttfb_ms": ttfb_ms,
+                    "format": "Unknown",
+                    "valid": False,
+                    "verified": False,
+                    "reason": "QUOTA_EXCEEDED" if is_quota else "VERIFICATION_ERROR",
+                    "error": str(e)
+                }
 
             ttfb_ms = round((time.perf_counter() - t0) * 1000, 2)
+
+            if not v_res or not isinstance(v_res, dict):
+                return {
+                    "status": "FAILED",
+                    "candidate": candidate,
+                    "direct_url": direct_url,
+                    "ttfb_ms": ttfb_ms,
+                    "format": "Unknown",
+                    "valid": False,
+                    "verified": False,
+                    "reason": "VERIFICATION_EMPTY"
+                }
+
+            # Check 403 or JSON error (quota exceeded)
+            if _is_quota_error(v_res):
+                return {
+                    "status": "FAILED",
+                    "candidate": candidate,
+                    "direct_url": direct_url,
+                    "ttfb_ms": ttfb_ms,
+                    "format": v_res.get("format", "Unknown"),
+                    "valid": False,
+                    "verified": False,
+                    "reason": "QUOTA_EXCEEDED",
+                    "error": v_res.get("error", "403 Quota Exceeded")
+                }
+
+            if not v_res.get("valid"):
+                return {
+                    "status": "FAILED",
+                    "candidate": candidate,
+                    "direct_url": direct_url,
+                    "ttfb_ms": ttfb_ms,
+                    "format": v_res.get("format", "Unknown"),
+                    "valid": False,
+                    "verified": False,
+                    "reason": v_res.get("reason") or "INVALID_CONTAINER",
+                    "error": v_res.get("error", "")
+                }
 
             v_format = v_res.get("format")
             fmt = v_format or candidate.get("format") or "Unknown"
@@ -155,11 +296,16 @@ async def verify_single_candidate(
                 size = cand_size or v_size or "Unknown"
 
             enriched = dict(candidate)
-            enriched["direct_url"] = direct_url
-            enriched["ttfb_ms"] = ttfb_ms
-            enriched["verified"] = True
-            enriched["format"] = fmt
-            enriched["size"] = size
+            enriched.update({
+                "status": "SUCCESS",
+                "candidate": candidate,
+                "direct_url": direct_url,
+                "ttfb_ms": ttfb_ms,
+                "format": fmt,
+                "valid": True,
+                "verified": True,
+                "size": size,
+            })
             if "total_bytes" in v_res:
                 enriched["total_bytes"] = v_res.get("total_bytes")
             if "content_type" in v_res:
@@ -171,7 +317,19 @@ async def verify_single_candidate(
 
     except (asyncio.TimeoutError, Exception) as e:
         logger.debug(f"[Cascade] Candidate verification failed or timed out: {e}")
-        return None
+        ttfb_ms = round((time.perf_counter() - t0) * 1000, 2)
+        is_quota = _is_quota_error(e)
+        return {
+            "status": "FAILED",
+            "candidate": candidate,
+            "direct_url": target_url,
+            "ttfb_ms": ttfb_ms,
+            "format": "Unknown",
+            "valid": False,
+            "verified": False,
+            "reason": "QUOTA_EXCEEDED" if is_quota else "TIMEOUT",
+            "error": str(e)
+        }
     finally:
         if own_client:
             try:
@@ -186,31 +344,79 @@ async def resolve_stream_cascade(
     timeout: float = 4.0,
     stagger_delay: float = 0.150,
     client: Optional[httpx.AsyncClient] = None,
-    candidate_timeout: float = 2.5
+    candidate_timeout: float = 2.5,
+    **kwargs
 ) -> dict:
     """
     Takes up to max_workers top candidates (from rank_release) and benchmarks them in parallel
-    using staggered launch delay.
-    The first verified responder becomes primary.
-    Subsequent verified responders are collected into waterfall sorted by TTFB.
+    using staggered launch delay (150ms).
+    The fastest verified responder (valid: True, status: "SUCCESS") becomes primary.
+    Remaining healthy responders populate the waterfall list sorted ascending by TTFB.
+    Attaches multi-provider embed fallbacks from EmbedEngine.
+    Returns:
+    {
+        "status": "SUCCESS" | "FALLBACK",
+        "primary": primary_dict,
+        "waterfall": [list of healthy mirrors sorted by TTFB],
+        "embed_fallback": embed_dict,
+        "candidates_tested": int
+    }
     """
+    imdb_id = kwargs.get("imdb_id", "")
+    title = kwargs.get("title", "")
+    season = kwargs.get("season", None)
+    episode = kwargs.get("episode", None)
+    media_type = kwargs.get("media_type") or kwargs.get("type") or "movie"
+
+    # Infer metadata from candidates if available
+    if candidates and isinstance(candidates, list):
+        for c in candidates:
+            if isinstance(c, dict):
+                if not imdb_id and c.get("imdb_id"):
+                    imdb_id = c["imdb_id"]
+                if not title and c.get("title"):
+                    title = c["title"]
+                if season is None and c.get("season") is not None:
+                    season = c["season"]
+                if episode is None and c.get("episode") is not None:
+                    episode = c["episode"]
+                if media_type == "movie" and (c.get("media_type") or c.get("type")):
+                    media_type = c.get("media_type") or c.get("type")
+
+    def _build_embed_fallback() -> dict:
+        try:
+            from embed_engine import EmbedEngine
+            return EmbedEngine.get_preferred_embed(
+                title=title,
+                season=season,
+                episode=episode,
+                imdb_id=imdb_id,
+                media_type=media_type,
+                item_id=imdb_id,
+            )
+        except Exception as e:
+            logger.debug(f"[Cascade] Error generating embed fallback: {e}")
+            return {}
+
     if not candidates or not isinstance(candidates, list):
         return {
-            "status": "NO_STREAMS",
+            "status": "FALLBACK",
             "primary": None,
             "waterfall": [],
+            "embed_fallback": _build_embed_fallback(),
             "candidates_tested": 0
         }
 
-    # Rank and slice candidates
+    # Rank and slice top candidates
     sorted_candidates = sorted(candidates, key=_safe_rank, reverse=True)
     top_candidates = sorted_candidates[:max_workers]
 
     if not top_candidates:
         return {
-            "status": "NO_STREAMS",
+            "status": "FALLBACK",
             "primary": None,
             "waterfall": [],
+            "embed_fallback": _build_embed_fallback(),
             "candidates_tested": 0
         }
 
@@ -250,7 +456,7 @@ async def resolve_stream_cascade(
                 except (asyncio.TimeoutError, Exception):
                     continue
 
-                if res and res.get("verified"):
+                if res and res.get("status") == "SUCCESS" and res.get("valid") is True:
                     if primary is None:
                         primary = res
                     else:
@@ -268,14 +474,15 @@ async def resolve_stream_cascade(
             except Exception:
                 pass
 
-    # Sort waterfall candidates by TTFB
+    # Sort remaining healthy waterfall responders strictly by TTFB
     waterfall.sort(key=lambda x: x.get("ttfb_ms", float("inf")))
 
-    status = "SUCCESS" if primary is not None else "NO_STREAMS"
+    status = "SUCCESS" if primary is not None else "FALLBACK"
     return {
         "status": status,
         "primary": primary,
         "waterfall": waterfall,
+        "embed_fallback": _build_embed_fallback(),
         "candidates_tested": len(top_candidates)
     }
 
@@ -287,7 +494,9 @@ async def cascade_search_and_resolve(
     episode: Optional[int] = None,
     max_workers: int = 5,
     timeout: float = 4.0,
-    engine: Optional[Any] = None
+    engine: Optional[Any] = None,
+    imdb_id: str = "",
+    **kwargs
 ) -> dict:
     """
     Helper that calls play_engine.search(), takes the top candidates, and calls resolve_stream_cascade().
@@ -307,7 +516,17 @@ async def cascade_search_and_resolve(
     else:
         candidates = []
 
-    return await resolve_stream_cascade(candidates, max_workers=max_workers, timeout=timeout)
+    return await resolve_stream_cascade(
+        candidates,
+        max_workers=max_workers,
+        timeout=timeout,
+        title=query,
+        media_type=media_type,
+        season=season,
+        episode=episode,
+        imdb_id=imdb_id,
+        **kwargs
+    )
 
 
 if __name__ == "__main__":
@@ -322,5 +541,7 @@ if __name__ == "__main__":
         print(f"[*] Waterfall count: {len(res.get('waterfall', []))}")
         for i, w in enumerate(res.get("waterfall", [])):
             print(f"    [{i+1}] {w.get('direct_url')} | TTFB: {w.get('ttfb_ms')}ms")
+        if res.get("embed_fallback"):
+            print(f"[*] Embed fallback: {res['embed_fallback'].get('embed_url')}")
 
     asyncio.run(_main())

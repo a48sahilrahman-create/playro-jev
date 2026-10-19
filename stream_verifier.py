@@ -45,25 +45,54 @@ class StreamVerifier:
 
         url_str = str(url).strip()
 
+        # Handle URLs with :: delimiters cleanly (e.g. stream_url::headers or stream_url::token) without URL parsing exceptions
+        clean_url = url_str
+        req_headers = dict(self.headers)
+        if "::" in url_str:
+            is_ipv6_only = False
+            bo = url_str.find('[')
+            bc = url_str.find(']')
+            dc = url_str.find('::')
+            if bo != -1 and bc != -1 and bo < dc < bc and url_str.count('::') == 1:
+                is_ipv6_only = True
+
+            if not is_ipv6_only:
+                if bo != -1 and bc != -1 and bo < dc < bc:
+                    base = url_str[:bc+1]
+                    rest = url_str[bc+1:]
+                    parts = [base + rest.split('::')[0]] + rest.split('::')[1:]
+                else:
+                    parts = url_str.split('::')
+                if parts[0].startswith(('http://', 'https://')):
+                    clean_url = parts[0].strip()
+                    for extra in parts[1:]:
+                        extra = extra.strip()
+                        if '=' in extra:
+                            hk, hv = extra.split('=', 1)
+                            req_headers[hk.strip()] = hv.strip()
+
         # SSRF Security Guard & DNS Rebinding Interceptor
         try:
             from link_resolver import is_safe_url, install_dns_ssrf_guard
             install_dns_ssrf_guard()
-            if not is_safe_url(url_str):
+            if not is_safe_url(clean_url):
                 return {
                     "valid": False,
                     "error": "Destination blocked by SSRF private-network policy",
+                    "format": "Unknown/Invalid",
+                    "detected_format": "Unknown/Invalid",
                     "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
                 }
         except Exception:
             pass
 
         # Special handling for YouTube URLs & Direct Google CDN video streams
-        if any(k in url_str for k in ["youtube.com/watch", "youtu.be/", "googlevideo.com", "video-downloads.googleusercontent.com"]):
+        if any(k in clean_url for k in ["youtube.com/watch", "youtu.be/", "googlevideo.com", "video-downloads.googleusercontent.com"]):
             return {
                 "valid": True,
                 "status_code": 200,
                 "format": "Direct Video Stream",
+                "detected_format": "Direct Video Stream",
                 "magic_bytes_hex": "DIRECT",
                 "content_type": "video/mp4",
                 "size": "Direct Stream",
@@ -84,17 +113,17 @@ class StreamVerifier:
 
         try:
             # For local stream endpoints or HTTP Range endpoints, perform targeted Range GET
-            if "127.0.0.1" in url_str or "localhost" in url_str:
-                resp = await client.get(url_str, headers=self.headers, timeout=STREAM_CHECK_TIMEOUT)
+            if "127.0.0.1" in clean_url or "localhost" in clean_url or not hasattr(client, "stream"):
+                resp = await client.get(clean_url, headers=req_headers, timeout=STREAM_CHECK_TIMEOUT)
                 elapsed = (time.perf_counter() - t0) * 1000
                 status_code = resp.status_code
                 content_type = resp.headers.get("content-type", "").lower()
                 content_range = resp.headers.get("content-range", "")
                 content_length = resp.headers.get("content-length", "")
-                data = resp.content
+                data = resp.content if isinstance(getattr(resp, "content", None), (bytes, bytearray)) else (resp.text.encode() if hasattr(resp, "text") else b"")
             else:
                 # Use stream() context to read only the initial chunk (prevents downloading full multi-GB file if server ignores Range)
-                async with client.stream("GET", url_str, headers=self.headers, timeout=STREAM_CHECK_TIMEOUT) as resp:
+                async with client.stream("GET", clean_url, headers=req_headers, timeout=STREAM_CHECK_TIMEOUT) as resp:
                     elapsed = (time.perf_counter() - t0) * 1000
 
                     # SSRF Hop Verification on all redirects followed
@@ -106,6 +135,8 @@ class StreamVerifier:
                                 return {
                                     "valid": False,
                                     "error": "Redirect target blocked by SSRF private-network policy",
+                                    "format": "Unknown/Invalid",
+                                    "detected_format": "Unknown/Invalid",
                                     "elapsed_ms": round(elapsed, 2)
                                 }
                         if not is_safe_url(str(resp.url)):
@@ -113,6 +144,8 @@ class StreamVerifier:
                             return {
                                 "valid": False,
                                 "error": "Destination blocked by SSRF private-network policy",
+                                "format": "Unknown/Invalid",
+                                "detected_format": "Unknown/Invalid",
                                 "elapsed_ms": round(elapsed, 2)
                             }
                     except Exception:
@@ -154,6 +187,34 @@ class StreamVerifier:
             else:
                 formatted_size = "Direct Stream"
 
+            # Immediate rejection for non-200/206 HTTP status or JSON error bodies (e.g. 403 quota exceeded, 500 worker crash, 7B 0A / {"error": ...})
+            is_json_error = (
+                data[:2] == b'\x7b\x0a' or
+                data.startswith(b'{\n') or
+                data.startswith(b'{\r\n') or
+                data.startswith(b'{\t') or
+                data.startswith(b'{"') or
+                b'{"error"' in data or
+                b'"error":' in data or
+                b'downloadquotaexceeded' in data.lower() or
+                b'quota exceeded' in data.lower()
+            )
+
+            if status_code not in (200, 206) or is_json_error:
+                error_fmt = "Quota Exceeded / Error" if (status_code in (403, 500) or is_json_error) else "Unknown/Invalid"
+                return {
+                    "valid": False,
+                    "status_code": status_code,
+                    "format": error_fmt,
+                    "detected_format": error_fmt,
+                    "magic_bytes_hex": data[:8].hex().upper() if len(data) >= 8 else "",
+                    "content_type": content_type,
+                    "size": formatted_size,
+                    "total_bytes": total_size_bytes,
+                    "malware_detected": False,
+                    "elapsed_ms": round(elapsed, 2)
+                }
+
             # Non-Fast-Start MP4 Tail Moov Box Detection
             # If mdat is upfront and moov is not in the initial probe, probe up to 256KB from the tail
             # Enforce strict HTTP 206 Partial Content check (if server returns 200, it ignored Range and is sending from byte 0)
@@ -161,9 +222,9 @@ class StreamVerifier:
                 try:
                     probe_size = min(262144, total_size_bytes - 1)
                     probe_start = max(0, total_size_bytes - probe_size)
-                    tail_headers = dict(self.headers)
+                    tail_headers = dict(req_headers)
                     tail_headers["Range"] = f"bytes={probe_start}-{total_size_bytes - 1}"
-                    async with client.stream("GET", url_str, headers=tail_headers, timeout=1.5) as tail_resp:
+                    async with client.stream("GET", clean_url, headers=tail_headers, timeout=1.5) as tail_resp:
                         if tail_resp.status_code == 206:
                             tail_data = b""
                             try:
@@ -199,7 +260,7 @@ class StreamVerifier:
             is_hls = (
                 (b'#EXTM3U' in data) or
                 ("mpegurl" in content_type) or
-                (".m3u8" in url_str.lower())
+                (".m3u8" in clean_url.lower())
             )
             is_ts = data.startswith(b'\x47') or ("video/mp2t" in content_type)
             is_avi = data.startswith(b'RIFF') and (b'AVI ' in data[:16])
@@ -225,10 +286,10 @@ class StreamVerifier:
                 status_code in [200, 206]
             )
 
-            # Fallback for servers rejecting byte-range (e.g. 416, 403 on range header)
-            if not is_valid_video and status_code in [403, 416]:
+            # Fallback for servers rejecting byte-range (e.g. 416 on range header)
+            if not is_valid_video and status_code == 416:
                 try:
-                    head_resp = await client.head(url_str, timeout=STREAM_CHECK_TIMEOUT)
+                    head_resp = await client.head(clean_url, timeout=STREAM_CHECK_TIMEOUT)
                     h_type = head_resp.headers.get("content-type", "").lower()
                     if ("video" in h_type or "octet-stream" in h_type) or head_resp.status_code == 200:
                         is_valid_video = True
@@ -258,6 +319,7 @@ class StreamVerifier:
                 "valid": is_valid_video,
                 "status_code": status_code,
                 "format": detected_format,
+                "detected_format": detected_format,
                 "magic_bytes_hex": data[:8].hex().upper() if len(data) >= 8 else "",
                 "content_type": content_type,
                 "size": formatted_size,
@@ -270,6 +332,8 @@ class StreamVerifier:
             return {
                 "valid": False,
                 "error": str(e),
+                "format": "Unknown/Invalid",
+                "detected_format": "Unknown/Invalid",
                 "elapsed_ms": round(elapsed, 2)
             }
         finally:

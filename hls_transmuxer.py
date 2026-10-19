@@ -2,7 +2,7 @@
 
 Converts high-bitrate remote or local media streams on-the-fly into RFC 8216
 compliant HLS (HTTP Live Streaming) VOD playlists with dynamic MPEG-TS chunk slicing,
-audio track selection, volume boosting, memory-bounded LRU segment caching,
+audio track selection, volume boosting, memory-bounded LRU segment caching with temp disk fallback,
 and speculative background prebuffering.
 """
 
@@ -14,8 +14,11 @@ import math
 import os
 import re
 import shutil
+import subprocess
+import tempfile
+import threading
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 try:
     from audio_probe import find_ffmpeg, parse_audio_streams, probe_audio_streams
@@ -40,75 +43,170 @@ logger = logging.getLogger("hls_transmuxer")
 
 
 class HLSSegmentCache:
-    """In-memory bounded LRU cache storing segment_key -> bytes.
+    """In-memory bounded LRU cache with temp disk fallback storing segment_key -> bytes.
 
-    Evicts least recently used segments when total stored payload exceeds max_size_mb.
+    Defaults to 150MB capacity and up to 200 segments with sub-millisecond retrieval.
+    Key format: {session_id}_{segment_idx}_{track_idx}.ts
     """
 
-    def __init__(self, max_size_mb: int = 150) -> None:
+    def __init__(
+        self,
+        max_size_mb: int = 150,
+        max_segments: int = 200,
+        temp_dir: Optional[str] = None,
+        disk_fallback: bool = True,
+    ) -> None:
         self.max_size_mb: int = max_size_mb
         self.max_size_bytes: int = max_size_mb * 1024 * 1024
+        self.max_segments: int = max_segments
+        self.disk_fallback: bool = disk_fallback
+        self.temp_dir: str = temp_dir or os.path.join(tempfile.gettempdir(), "playro_hls_cache")
+        try:
+            os.makedirs(self.temp_dir, exist_ok=True)
+        except Exception:
+            pass
+
         self.current_size: int = 0
         self._cache: OrderedDict[str, bytes] = OrderedDict()
+        self._lock = threading.RLock()
+
+    @staticmethod
+    def format_key(session_id: str, segment_idx: int, track_idx: int = 0) -> str:
+        """Returns canonical segment key: {session_id}_{segment_idx}_{track_idx}.ts"""
+        return f"{session_id}_{segment_idx}_{track_idx}.ts"
+
+    def _disk_path(self, key: str) -> str:
+        safe_name = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', key)
+        if not safe_name.endswith(".ts"):
+            safe_name += ".ts"
+        return os.path.join(self.temp_dir, safe_name)
+
+    def _save_to_disk(self, key: str, data: bytes) -> None:
+        if not self.disk_fallback or not self.temp_dir:
+            return
+        try:
+            p = self._disk_path(key)
+            with open(p, "wb") as f:
+                f.write(data)
+        except Exception as e:
+            logger.debug("Failed saving segment %s to temp disk: %s", key, e)
+
+    def in_memory(self, key: str) -> bool:
+        """Checks if a segment is actively held in the in-memory LRU tier."""
+        with self._lock:
+            return key in self._cache
 
     def get(self, key: str) -> Optional[bytes]:
-        """Retrieves a cached segment, promoting it to most recently used."""
-        if key not in self._cache:
-            return None
-        self._cache.move_to_end(key)
-        return self._cache[key]
+        """Retrieves a cached segment, promoting it to MRU (<1ms in-memory LRU).
 
-    def put(self, key: str, data: bytes) -> None:
-        """Stores a segment payload, executing LRU eviction if capacity is exceeded."""
+        If missing in memory and disk_fallback is enabled, attempts temp disk recovery.
+        """
+        with self._lock:
+            if key in self._cache:
+                self._cache.move_to_end(key)
+                return self._cache[key]
+
+            if self.disk_fallback:
+                p = self._disk_path(key)
+                if os.path.isfile(p):
+                    try:
+                        with open(p, "rb") as f:
+                            data = f.read()
+                        if data:
+                            self.put(key, data, save_disk=False)
+                            return data
+                    except Exception as e:
+                        logger.debug("Failed reading segment %s from temp disk: %s", key, e)
+
+            return None
+
+    def put(self, key: str, data: bytes, save_disk: bool = True) -> None:
+        """Stores a segment payload, executing LRU eviction if size or count capacity is exceeded."""
         if not isinstance(data, (bytes, bytearray)):
             return
         data_bytes = bytes(data)
         data_len = len(data_bytes)
 
-        if data_len > self.max_size_bytes:
-            logger.warning(
-                "Segment %s (%d bytes) exceeds total cache capacity (%d bytes); skipping.",
-                key,
-                data_len,
-                self.max_size_bytes,
-            )
-            return
+        with self._lock:
+            if data_len > self.max_size_bytes:
+                logger.warning(
+                    "Segment %s (%d bytes) exceeds total cache capacity (%d bytes); skipping.",
+                    key,
+                    data_len,
+                    self.max_size_bytes,
+                )
+                return
 
-        if key in self._cache:
-            self.current_size -= len(self._cache[key])
-            del self._cache[key]
+            if key in self._cache:
+                self.current_size -= len(self._cache[key])
+                del self._cache[key]
 
-        while self._cache and (self.current_size + data_len > self.max_size_bytes):
-            evicted_key, evicted_data = self._cache.popitem(last=False)
-            self.current_size -= len(evicted_data)
-            logger.debug("LRU evicted segment %s (%d bytes)", evicted_key, len(evicted_data))
+            # Evict LRU items if byte capacity or segment count ceiling is reached
+            while self._cache and (
+                (self.current_size + data_len > self.max_size_bytes)
+                or (len(self._cache) >= self.max_segments)
+            ):
+                evicted_key, evicted_data = self._cache.popitem(last=False)
+                self.current_size -= len(evicted_data)
+                if self.disk_fallback:
+                    self._save_to_disk(evicted_key, evicted_data)
+                logger.debug("LRU evicted segment %s (%d bytes)", evicted_key, len(evicted_data))
 
-        self._cache[key] = data_bytes
-        self.current_size += data_len
+            self._cache[key] = data_bytes
+            self.current_size += data_len
+
+            if self.disk_fallback and save_disk:
+                self._save_to_disk(key, data_bytes)
 
     def purge_session(self, session_id: str) -> int:
-        """Purges all cached segments associated with the given session ID."""
-        prefix = f"{session_id}:"
-        to_remove = [k for k in self._cache if k.startswith(prefix)]
-        for k in to_remove:
-            self.current_size -= len(self._cache[k])
-            del self._cache[k]
-        return len(to_remove)
+        """Purges all cached segments associated with the given session ID from memory and disk."""
+        with self._lock:
+            prefix_underscore = f"{session_id}_"
+            prefix_colon = f"{session_id}:"
+            to_remove = [
+                k for k in self._cache
+                if k.startswith(prefix_underscore) or k.startswith(prefix_colon)
+            ]
+            for k in to_remove:
+                self.current_size -= len(self._cache[k])
+                del self._cache[k]
+
+            # Clean disk fallback files
+            if self.temp_dir and os.path.isdir(self.temp_dir):
+                try:
+                    for fname in os.listdir(self.temp_dir):
+                        if fname.startswith(prefix_underscore) or fname.startswith(prefix_colon):
+                            try:
+                                os.remove(os.path.join(self.temp_dir, fname))
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+
+            return len(to_remove)
 
     def clear(self) -> None:
-        """Clears all stored segments and resets byte counter."""
-        self._cache.clear()
-        self.current_size = 0
+        """Clears all stored segments and resets byte counter and temp directory."""
+        with self._lock:
+            self._cache.clear()
+            self.current_size = 0
+            if self.temp_dir and os.path.isdir(self.temp_dir):
+                shutil.rmtree(self.temp_dir, ignore_errors=True)
+                os.makedirs(self.temp_dir, exist_ok=True)
 
     def __len__(self) -> int:
-        return len(self._cache)
+        with self._lock:
+            return len(self._cache)
 
     def __contains__(self, key: str) -> bool:
-        return key in self._cache
+        with self._lock:
+            return key in self._cache or (
+                self.disk_fallback and os.path.isfile(self._disk_path(key))
+            )
 
 
-# Global segment cache singleton (150 MB ceiling)
-HLS_SEGMENT_CACHE = HLSSegmentCache(max_size_mb=150)
+# Global segment cache singleton (150 MB ceiling, 200 segments max)
+HLS_SEGMENT_CACHE = HLSSegmentCache(max_size_mb=150, max_segments=200, disk_fallback=True)
 
 
 class HLSSession:
@@ -118,14 +216,16 @@ class HLSSession:
         self,
         session_id: str,
         media_url: str,
-        duration: float,
+        duration: float = 0.0,
         audio_track: int = 0,
         volume_boost: float = 1.0,
         is_audio_aac: bool = False,
         segment_duration: float = 4.0,
+        title: str = "",
         created_at: Optional[float] = None,
         last_accessed: Optional[float] = None,
         cache: Optional[HLSSegmentCache] = None,
+        streams: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
         self.session_id: str = session_id
         self.media_url: str = media_url
@@ -134,6 +234,8 @@ class HLSSession:
         self.volume_boost: float = float(volume_boost)
         self.is_audio_aac: bool = bool(is_audio_aac)
         self.segment_duration: float = float(segment_duration)
+        self.title: str = title
+        self.streams: List[Dict[str, Any]] = streams or []
 
         now = time.time()
         self.created_at: float = created_at if created_at is not None else now
@@ -141,8 +243,78 @@ class HLSSession:
         self.cache: HLSSegmentCache = cache if cache is not None else HLS_SEGMENT_CACHE
         self._inflight: Dict[str, asyncio.Task] = {}
 
-    def generate_master_manifest(self, base_url: str = "") -> str:
-        """Returns standard RFC 8216 master playlist pointing to this session's media manifest."""
+        # Auto-inspect stream duration and audio tracks if duration is missing
+        if self.duration <= 0.0 and self.media_url:
+            self.inspect_media()
+
+    def inspect_media(self) -> Dict[str, Any]:
+        """Inspects duration and audio tracks using audio_probe.py (find_ffmpeg and parse_audio_streams)."""
+        ffmpeg_bin = find_ffmpeg()
+        cmd = [ffmpeg_bin, "-hide_banner", "-i", self.media_url]
+        try:
+            proc = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10.0,
+            )
+            output = proc.stderr.decode("utf-8", errors="replace")
+            parsed = parse_audio_streams(output, self.media_url)
+            if parsed.get("duration_seconds", 0.0) > 0:
+                self.duration = parsed["duration_seconds"]
+            self.streams = parsed.get("streams", [])
+            if 0 <= self.audio_track < len(self.streams):
+                codec = str(self.streams[self.audio_track].get("codec", "")).lower()
+                self.is_audio_aac = (codec == "aac")
+            elif parsed.get("codecs"):
+                self.is_audio_aac = "aac" in [c.lower() for c in parsed["codecs"]]
+            return parsed
+        except Exception as e:
+            logger.debug("inspect_media fallback for %s: %s", self.media_url, e)
+            if self.duration <= 0.0:
+                self.duration = 7200.0
+            return {
+                "url": self.media_url,
+                "duration_seconds": self.duration,
+                "streams": self.streams,
+                "error": str(e),
+            }
+
+    async def inspect_media_async(self) -> Dict[str, Any]:
+        """Asynchronously inspects duration and audio tracks using probe_audio_streams."""
+        try:
+            parsed = await probe_audio_streams(self.media_url)
+            if parsed.get("duration_seconds", 0.0) > 0:
+                self.duration = parsed["duration_seconds"]
+            self.streams = parsed.get("streams", [])
+            if 0 <= self.audio_track < len(self.streams):
+                codec = str(self.streams[self.audio_track].get("codec", "")).lower()
+                self.is_audio_aac = (codec == "aac")
+            elif parsed.get("codecs"):
+                self.is_audio_aac = "aac" in [c.lower() for c in parsed["codecs"]]
+            return parsed
+        except Exception as e:
+            logger.debug("inspect_media_async failed for %s: %s", self.media_url, e)
+            if self.duration <= 0.0:
+                self.duration = 7200.0
+            return {
+                "url": self.media_url,
+                "duration_seconds": self.duration,
+                "streams": self.streams,
+                "error": str(e),
+            }
+
+    def generate_master_playlist(
+        self,
+        selected_track: int = 0,
+        boost_db: float = 0.0,
+        base_url: str = "",
+    ) -> str:
+        """Generates an RFC 8216 compliant VOD master playlist with stream info."""
+        self.audio_track = selected_track
+        if boost_db != 0.0:
+            self.volume_boost = boost_db
+
         base = base_url.rstrip("/") if base_url else ""
         manifest_url = f"{base}/api/hls/{self.session_id}/index.m3u8"
         return (
@@ -152,10 +324,23 @@ class HLSSession:
             f"{manifest_url}\n"
         )
 
-    def generate_media_manifest(self, base_url: str = "") -> str:
-        """Calculates total segments and generates an RFC 8216 compliant VOD media playlist."""
+    def generate_master_manifest(self, base_url: str = "") -> str:
+        """Backward-compatible alias for generate_master_playlist."""
+        return self.generate_master_playlist(
+            selected_track=self.audio_track,
+            boost_db=self.volume_boost if self.volume_boost != 1.0 else 0.0,
+            base_url=base_url,
+        )
+
+    def generate_media_playlist(self, track_idx: int = 0, base_url: str = "") -> str:
+        """Generates an RFC 8216 compliant VOD media playlist.
+
+        Includes #EXT-X-TARGETDURATION:5, #EXT-X-MEDIA-SEQUENCE:0, explicit #EXTINF:4.000 tags,
+        and ends with #EXT-X-ENDLIST.
+        """
+        self.audio_track = track_idx
         total_segments = max(1, math.ceil(self.duration / self.segment_duration))
-        target_duration = int(self.segment_duration) + 1
+        target_duration = int(self.segment_duration) + 1  # 5 for 4.0s segments
 
         lines: List[str] = [
             "#EXTM3U",
@@ -182,56 +367,99 @@ class HLSSession:
         lines.append("#EXT-X-ENDLIST")
         return "\n".join(lines) + "\n"
 
-    async def get_or_generate_segment(self, segment_idx: int) -> bytes:
-        """Retrieves segment from cache if present; otherwise slices it with FFmpeg and caches it."""
+    def generate_media_manifest(self, base_url: str = "") -> str:
+        """Backward-compatible alias for generate_media_playlist."""
+        return self.generate_media_playlist(track_idx=self.audio_track, base_url=base_url)
+
+    async def get_segment(
+        self,
+        idx: int,
+        track_idx: int = 0,
+        boost_db: float = 0.0,
+    ) -> bytes:
+        """Retrieves or slices segment idx with track_idx and optional boost_db.
+
+        Checks LRU segment cache first. On miss, slices segment via FFmpeg fast seek,
+        caches result, and triggers speculative prebuffering of idx+1 and idx+2.
+        """
         self.last_accessed = time.time()
-        cache_key = f"{self.session_id}:{segment_idx}"
+        cache_key = HLSSegmentCache.format_key(self.session_id, idx, track_idx)
+        legacy_key = f"{self.session_id}:{idx}"
 
         cached_data = self.cache.get(cache_key)
+        if cached_data is None:
+            cached_data = self.cache.get(legacy_key)
+
         if cached_data is not None:
-            # Trigger speculative prebuffering for upcoming chunks
-            self._schedule_prebuffer(segment_idx)
+            self._schedule_prebuffer(idx, track_idx=track_idx, boost_db=boost_db)
             return cached_data
 
         if cache_key in self._inflight:
             return await self._inflight[cache_key]
 
-        task = asyncio.create_task(self._slice_segment_ffmpeg(segment_idx))
+        task = asyncio.create_task(
+            self._slice_segment_ffmpeg(idx, track_idx=track_idx, boost_db=boost_db)
+        )
         self._inflight[cache_key] = task
         try:
             data = await task
             if data:
                 self.cache.put(cache_key, data)
+                self.cache.put(legacy_key, data)
         finally:
             self._inflight.pop(cache_key, None)
 
-        self._schedule_prebuffer(segment_idx)
+        self._schedule_prebuffer(idx, track_idx=track_idx, boost_db=boost_db)
         return data
 
-    def _schedule_prebuffer(self, segment_idx: int) -> None:
+    async def get_or_generate_segment(self, segment_idx: int) -> bytes:
+        """Backward-compatible alias for get_segment using session default track and boost."""
+        boost_val = self.volume_boost if self.volume_boost != 1.0 else 0.0
+        return await self.get_segment(segment_idx, track_idx=self.audio_track, boost_db=boost_val)
+
+    def _schedule_prebuffer(
+        self,
+        segment_idx: int,
+        track_idx: int = 0,
+        boost_db: float = 0.0,
+    ) -> None:
         """Safely fires speculative prebuffer task on the running event loop."""
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(self._prebuffer(segment_idx))
+            loop.create_task(self._prebuffer(segment_idx, track_idx=track_idx, boost_db=boost_db))
         except RuntimeError:
             pass
 
-    async def _prebuffer(self, segment_idx: int) -> None:
+    async def _prebuffer(
+        self,
+        segment_idx: int,
+        track_idx: int = 0,
+        boost_db: float = 0.0,
+    ) -> None:
         """Asynchronously pre-slices segments idx+1 and idx+2 into cache."""
         total_segments = max(1, math.ceil(self.duration / self.segment_duration))
         for offset in (1, 2):
             next_idx = segment_idx + offset
             if 0 <= next_idx < total_segments:
-                next_key = f"{self.session_id}:{next_idx}"
-                if self.cache.get(next_key) is not None or next_key in self._inflight:
+                next_key = HLSSegmentCache.format_key(self.session_id, next_idx, track_idx)
+                legacy_key = f"{self.session_id}:{next_idx}"
+                if (
+                    self.cache.get(next_key) is not None
+                    or self.cache.get(legacy_key) is not None
+                    or next_key in self._inflight
+                    or legacy_key in self._inflight
+                ):
                     continue
 
                 try:
-                    task = asyncio.create_task(self._slice_segment_ffmpeg(next_idx))
+                    task = asyncio.create_task(
+                        self._slice_segment_ffmpeg(next_idx, track_idx=track_idx, boost_db=boost_db)
+                    )
                     self._inflight[next_key] = task
                     next_data = await task
                     if next_data:
                         self.cache.put(next_key, next_data)
+                        self.cache.put(legacy_key, next_data)
                 except Exception as e:
                     logger.debug(
                         "Prebuffer failed for segment %d of session %s: %s",
@@ -242,8 +470,18 @@ class HLSSession:
                 finally:
                     self._inflight.pop(next_key, None)
 
-    async def _slice_segment_ffmpeg(self, segment_idx: int) -> bytes:
+    async def _slice_segment_ffmpeg(
+        self,
+        segment_idx: int,
+        track_idx: Optional[int] = None,
+        boost_db: Optional[float] = None,
+    ) -> bytes:
         """Invokes FFmpeg to slice an MPEG-TS segment directly from the source stream."""
+        actual_track = track_idx if track_idx is not None else self.audio_track
+        actual_boost = boost_db if boost_db is not None else (
+            self.volume_boost if self.volume_boost != 1.0 else 0.0
+        )
+
         ss = max(0.0, segment_idx * self.segment_duration)
         ffmpeg_bin = find_ffmpeg()
 
@@ -267,19 +505,22 @@ class HLSSession:
             "-i", self.media_url,
             "-t", f"{self.segment_duration + 0.05:.3f}",
             "-map", "0:v:0",
-            "-map", f"0:a:{self.audio_track}?",
+            "-map", f"0:a:{actual_track}?",
             "-c:v", "copy",
         ])
 
         # Audio stream handling:
-        # If volume boost is requested, audio must be decoded through the filtergraph.
-        # Otherwise, copy directly if already AAC or transcode to AAC 192k stereo.
-        if self.volume_boost != 1.0:
+        # If volume boost requested, add -af "volume={boost_db}dB" or linear volume filter
+        has_boost = (actual_boost != 0.0 and actual_boost != 1.0)
+        if has_boost:
+            boost_filter = f"volume={actual_boost}dB" if isinstance(actual_boost, (int, float)) and actual_boost > 1.5 else f"volume={actual_boost}"
+            if isinstance(actual_boost, (int, float)) and (0 < actual_boost <= 30.0 and actual_boost != 1.0):
+                boost_filter = f"volume={actual_boost}dB"
             cmd.extend([
                 "-c:a", "aac",
                 "-b:a", "192k",
                 "-ac", "2",
-                "-af", f"volume={self.volume_boost}",
+                "-af", boost_filter,
             ])
         elif self.is_audio_aac:
             cmd.extend(["-c:a", "copy"])
@@ -333,30 +574,47 @@ class HLSSessionManager:
     """Manages active HLS sessions, lifecycle tracking, and idle session garbage collection."""
 
     def __init__(self, cache: Optional[HLSSegmentCache] = None) -> None:
-        self.sessions: Dict[str, HLSSession] = {}
+        self._sessions: Dict[str, HLSSession] = {}
+        self._lock = threading.RLock()
         self.cache: HLSSegmentCache = cache if cache is not None else HLS_SEGMENT_CACHE
+
+    @property
+    def sessions(self) -> Dict[str, HLSSession]:
+        """Backward-compatible accessor for sessions dict."""
+        return self._sessions
+
+    @sessions.setter
+    def sessions(self, value: Dict[str, HLSSession]) -> None:
+        self._sessions = value
 
     async def get_or_create_session(
         self,
-        media_url: str,
+        url: Optional[str] = None,
+        title: str = "",
         audio_track: int = 0,
         volume_boost: float = 1.0,
+        media_url: Optional[str] = None,
+        **kwargs: Any,
     ) -> HLSSession:
         """Retrieves an existing session or probes the media URL and creates a new HLSSession."""
-        session_key = f"{media_url}|{audio_track}|{volume_boost:.4f}"
+        target_url = (url or media_url or "").strip()
+        session_key = f"{target_url}|{audio_track}|{volume_boost:.4f}"
+        if title:
+            session_key += f"|{title}"
         session_id = hashlib.sha256(session_key.encode("utf-8")).hexdigest()[:16]
 
-        if session_id in self.sessions:
-            session = self.sessions[session_id]
-            session.last_accessed = time.time()
-            return session
+        with self._lock:
+            if session_id in self._sessions:
+                session = self._sessions[session_id]
+                session.last_accessed = time.time()
+                return session
 
         # Probe duration and audio codecs
         probe_res: Dict[str, Any] = {}
         try:
-            probe_res = await probe_audio_streams(media_url)
+            probe_res = await probe_audio_streams(target_url)
         except Exception as e:
-            logger.warning("probe_audio_streams failed for %s: %s", media_url, e)
+            logger.warning("probe_audio_streams failed for %s: %s", target_url, e)
 
         duration = probe_res.get("duration_seconds", 0.0) if probe_res else 0.0
         if not duration or duration <= 0:
@@ -375,40 +633,55 @@ class HLSSessionManager:
         now = time.time()
         session = HLSSession(
             session_id=session_id,
-            media_url=media_url,
+            media_url=target_url,
             duration=duration,
             audio_track=audio_track,
             volume_boost=volume_boost,
             is_audio_aac=is_audio_aac,
             segment_duration=4.0,
+            title=title,
             created_at=now,
             last_accessed=now,
             cache=self.cache,
+            streams=streams,
         )
-        self.sessions[session_id] = session
+
+        with self._lock:
+            self._sessions[session_id] = session
         return session
 
     def get_session(self, session_id: str) -> Optional[HLSSession]:
         """Retrieves an existing session by ID, updating its last_accessed timestamp."""
-        session = self.sessions.get(session_id)
-        if session:
-            session.last_accessed = time.time()
-        return session
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session:
+                session.last_accessed = time.time()
+            return session
 
-    def cleanup_expired_sessions(self, max_idle_sec: float = 180.0) -> int:
-        """Purges sessions inactive for more than max_idle_sec along with cached segments."""
+    def cleanup_idle_sessions(
+        self,
+        max_idle_seconds: float = 120.0,
+        max_idle_sec: Optional[float] = None,
+    ) -> int:
+        """Purges sessions inactive for more than max_idle_seconds along with cached segments."""
+        threshold = max_idle_sec if max_idle_sec is not None else max_idle_seconds
         now = time.time()
-        expired_ids = [
-            sid for sid, s in self.sessions.items()
-            if (now - s.last_accessed) > max_idle_sec
-        ]
-        for sid in expired_ids:
-            del self.sessions[sid]
-            self.cache.purge_session(sid)
+        with self._lock:
+            expired_ids = [
+                sid for sid, s in self._sessions.items()
+                if (now - s.last_accessed) > threshold
+            ]
+            for sid in expired_ids:
+                del self._sessions[sid]
+                self.cache.purge_session(sid)
 
         if expired_ids:
-            logger.info("Purged %d expired HLS session(s): %s", len(expired_ids), expired_ids)
+            logger.info("Purged %d idle HLS session(s): %s", len(expired_ids), expired_ids)
         return len(expired_ids)
+
+    def cleanup_expired_sessions(self, max_idle_sec: float = 180.0) -> int:
+        """Backward-compatible alias for cleanup_idle_sessions."""
+        return self.cleanup_idle_sessions(max_idle_seconds=max_idle_sec)
 
 
 # Global session manager singleton

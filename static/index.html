@@ -282,7 +282,7 @@
 
             <!-- Controls Cluster: Engine Toggle, Embed Provider, Audio Selector, Autoplay & VLC -->
             <div class="flex items-center gap-2 sm:gap-3 shrink-0 flex-wrap justify-end">
-                <!-- Engine Mode Toggle: [⚡ Direct HLS | 🎬 Embed Fallback | ▲ VLC] -->
+                <!-- Engine Mode Toggle: [⚡ Direct HLS | 🎬 Embed Fallback | ▲ VLC Player] -->
                 <div class="flex items-center bg-zinc-900/90 rounded-xl p-1 border border-white/10 shadow-lg" id="engineModeToggleGroup">
                     <button id="engineToggleDirect" onclick="switchPlayerMode('direct')" class="px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all bg-white text-zinc-950 shadow-sm" title="Direct HLS Transmuxer & Native Video">
                         <span>⚡</span>
@@ -294,20 +294,20 @@
                     </button>
                     <button id="engineToggleVlc" onclick="switchPlayerMode('vlc')" class="px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all text-orange-400 hover:text-orange-300 hover:bg-white/5" title="Launch Stream in External VLC Player">
                         <span>▲</span>
-                        <span class="hidden md:inline">VLC</span>
+                        <span class="hidden md:inline">VLC Player</span>
                     </button>
                 </div>
 
-                <!-- Embed Provider Dropdown / Switcher: [Filmu | Cinezo | Vidbolt | Vidy | Vidrift] -->
+                <!-- Embed Provider Pills Switcher: [Filmu | Cinezo | Vidbolt | Vidy | Vidrift] -->
                 <div id="embedProviderContainer" class="hidden flex items-center gap-1.5 bg-zinc-900/90 rounded-xl px-2.5 py-1 border border-white/10 shadow-lg">
                     <span class="text-[10px] uppercase font-mono text-indigo-400 font-bold hidden sm:inline">Provider:</span>
-                    <select id="embedProviderSelect" onchange="switchEmbedProvider(this.value)" class="bg-zinc-800 text-white text-xs font-semibold rounded-lg px-2 py-0.5 border border-white/10 focus:outline-none cursor-pointer">
-                        <option value="filmu">Filmu</option>
-                        <option value="cinezo">Cinezo</option>
-                        <option value="vidbolt">Vidbolt</option>
-                        <option value="vidy">Vidy</option>
-                        <option value="vidrift">Vidrift</option>
-                    </select>
+                    <div id="embedProviderPills" class="flex items-center gap-1">
+                        <button type="button" onclick="switchEmbedProvider('filmu')" class="embed-pill px-2 py-0.5 rounded-lg text-xs font-bold transition-all bg-indigo-600 text-white" data-provider="filmu">Filmu</button>
+                        <button type="button" onclick="switchEmbedProvider('cinezo')" class="embed-pill px-2 py-0.5 rounded-lg text-xs font-semibold transition-all text-zinc-400 hover:text-white hover:bg-white/10" data-provider="cinezo">Cinezo</button>
+                        <button type="button" onclick="switchEmbedProvider('vidbolt')" class="embed-pill px-2 py-0.5 rounded-lg text-xs font-semibold transition-all text-zinc-400 hover:text-white hover:bg-white/10" data-provider="vidbolt">Vidbolt</button>
+                        <button type="button" onclick="switchEmbedProvider('vidy')" class="embed-pill px-2 py-0.5 rounded-lg text-xs font-semibold transition-all text-zinc-400 hover:text-white hover:bg-white/10" data-provider="vidy">Vidy</button>
+                        <button type="button" onclick="switchEmbedProvider('vidrift')" class="embed-pill px-2 py-0.5 rounded-lg text-xs font-semibold transition-all text-zinc-400 hover:text-white hover:bg-white/10" data-provider="vidrift">Vidrift</button>
+                    </div>
                 </div>
 
                 <!-- Multi-Audio Track Selector hooked to /api/audio/probe -->
@@ -340,7 +340,7 @@
 
         <!-- Dual Viewport: Video Element & Embed Fallback Iframe -->
         <video id="videoElement" class="w-full h-full max-h-screen object-contain" controls autoplay playsinline></video>
-        <iframe id="embedIframe" class="hidden w-full h-full border-0" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"></iframe>
+        <iframe id="embedIframe" style="display:none; width:100%; height:100%; border:none;" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"></iframe>
 
         <!-- Playback Controls Alongside Video -->
         <div id="playerControlsContainer" class="absolute bottom-0 left-0 right-0 p-4 sm:p-6 z-20 bg-gradient-to-t from-black/95 via-black/80 to-transparent flex flex-col gap-2.5 transition-opacity duration-300">
@@ -704,6 +704,9 @@
         let currentPlayerMode = 'direct'; // 'direct', 'embed', 'vlc'
         let currentEmbedProvider = 'filmu'; // 'filmu', 'cinezo', 'vidbolt', 'vidy', 'vidrift'
         let lastEmbedProgressSave = 0;
+        let currentWaterfall = [];
+        let currentWaterfallIndex = 0;
+        let playbackStallTimer = null;
         let currentSearchReleases = [];
         let currentPlayingReleaseIndex = -1;
         let currentSourceFilter = 'ALL';
@@ -2684,13 +2687,13 @@
 
             renderAudioProbeUI(currentAudioProbeData, currentDirectUrl || currentStreamUrl);
 
-            // Reload active stream with newly selected audio track via HLS transmuxer
+            // Re-attach HLS master playlist with new &track= at current playback timestamp
             const target = currentDirectUrl || currentStreamUrl;
             if (target) {
                 const currentTime = Math.floor(getCurrentPlaybackTime());
                 const hlsUrl = `${API_BASE}/api/hls/master.m3u8?url=${encodeURIComponent(target)}&track=${selectedAudioTrackIndex}`;
                 showToast(`🔄 Switching Audio Track to ${trackName}...`);
-                await startPlayback(hlsUrl, currentTime);
+                loadHlsStream(hlsUrl, currentTime);
             }
         }
 
@@ -3004,6 +3007,81 @@
             }
         }
 
+        function clearPlaybackStallTimer() {
+            if (playbackStallTimer) {
+                clearTimeout(playbackStallTimer);
+                playbackStallTimer = null;
+            }
+        }
+
+        function populateWaterfallFromReleases(releaseIndex, title, badge, posterUrl) {
+            const list = (currentDetailReleases && currentDetailReleases.length > 0)
+                ? currentDetailReleases
+                : (currentSearchReleases && currentSearchReleases.length > 0 ? currentSearchReleases : []);
+            currentWaterfall = [];
+            currentWaterfallIndex = 0;
+            if (list.length > 0) {
+                for (let idx = 0; idx < list.length; idx++) {
+                    if (idx === releaseIndex) continue;
+                    const item = list[idx];
+                    const target = item.download_link || item.link || item.stream_url || item.url || '';
+                    const proxyUrl = target ? `${API_BASE}/api/stream?url=${encodeURIComponent(target)}` : '';
+                    currentWaterfall.push({
+                        releaseIndex: idx,
+                        streamUrl: proxyUrl || target,
+                        rawTarget: target,
+                        title: item.title || title,
+                        badge: item.resolution || item.quality || badge,
+                        posterUrl: posterUrl
+                    });
+                }
+            }
+        }
+
+        async function fallbackToNextMirrorOrEmbed(reason = 'Stream error') {
+            clearPlaybackStallTimer();
+            if (currentWaterfall && currentWaterfallIndex < currentWaterfall.length) {
+                const nextMirror = currentWaterfall[currentWaterfallIndex++];
+                const mirrorTitle = nextMirror.title || currentMediaTitle || 'Next Mirror';
+                const mirrorBadge = nextMirror.badge || nextMirror.format || currentMediaBadge || 'Mirror';
+                const mirrorTarget = nextMirror.rawTarget || nextMirror.url || nextMirror.direct_url || '';
+                const mirrorStream = nextMirror.streamUrl || nextMirror.direct_url || mirrorTarget;
+
+                showToast(`🔄 ${reason}. Switching to mirror ${currentWaterfallIndex}/${currentWaterfall.length}...`);
+
+                await handlePlayClick(
+                    -1,
+                    mirrorStream,
+                    mirrorTarget,
+                    mirrorTitle,
+                    mirrorBadge,
+                    nextMirror.posterUrl || ''
+                );
+                return true;
+            } else {
+                showToast(`⚠️ ${reason}. Direct mirrors exhausted. Switched to Embed Fallback.`, 'error');
+                switchPlayerMode('embed');
+                return false;
+            }
+        }
+
+        function setupStallDetection(video) {
+            if (!video) return;
+            video.onwaiting = () => {
+                clearPlaybackStallTimer();
+                playbackStallTimer = setTimeout(async () => {
+                    if (!video.paused && !video.ended) {
+                        console.warn('Playback stalled for >4s. Triggering mirror failover or embed fallback...');
+                        await fallbackToNextMirrorOrEmbed('Playback stalled (>4s)');
+                    }
+                }, 4000);
+            };
+            video.onplaying = clearPlaybackStallTimer;
+            video.onpause = clearPlaybackStallTimer;
+            video.ontimeupdate = clearPlaybackStallTimer;
+            video.oncanplay = clearPlaybackStallTimer;
+        }
+
         // 3. Media Playback, VLC Toggle, Autoplay, and History
         async function handlePlayClick(releaseIndex, streamUrl, rawTarget, title, badge, posterUrl = '') {
             currentPlayingReleaseIndex = releaseIndex;
@@ -3015,6 +3093,10 @@
             isUserScrubbing = false;
             pendingDirectSeekTime = null;
             selectedAudioTrackIndex = 0;
+
+            if (releaseIndex !== -1) {
+                populateWaterfallFromReleases(releaseIndex, title, badge, posterUrl);
+            }
 
             if (vlcModeEnabled) {
                 addToHistory(title, badge, streamUrl, rawTarget, streamUrl, posterUrl, 0, 0);
@@ -3054,16 +3136,10 @@
 
             const formatLabel = streamMeta.format || (streamMeta.is_mkv ? 'MKV (EBML)' : 'Direct Video Stream');
 
-            // Stream Verification Lock: Guard against launching raw unverified HTML gateways into VLC
+            // Stream Verification Lock: Guard against launching raw unverified HTML gateways or dead URLs into VLC
             if (!streamMeta.valid || formatLabel.includes('Unknown') || formatLabel.includes('Invalid')) {
-                closeVideoPlayer();
-                const isPlayableMedia = directUrl && (directUrl.includes('.mkv') || directUrl.includes('.mp4') || directUrl.includes('.m3u8') || directUrl.includes('r2.cloudflarestorage') || directUrl.includes('pixeldrain') || directUrl.includes('workers.dev'));
-                if (isPlayableMedia) {
-                    showToast(`🚀 Auto-launching verified ${formatLabel} in VLC Player...`);
-                    openExternalVLC(directUrl);
-                } else {
-                    showToast(`⚠️ Stream Verification Lock: Direct media container unverified (${formatLabel}). Refusing unplayable launch.`, 5000);
-                }
+                console.warn(`Stream Verification Lock: Container unverified (${formatLabel}) for ${directUrl}`);
+                await fallbackToNextMirrorOrEmbed(`Unverified container (${formatLabel})`);
                 return;
             }
 
@@ -3078,7 +3154,7 @@
             // Auto-probe stream audio and detect TrueHD/DTS/AC3
             const probeResult = await fetchAudioProbe(directUrl);
 
-            // Directly start browser playback via Hls.js / HLS transmuxer
+            // Directly start browser playback via Hls.js / HLS transmuxer (MKVs play natively inside browser)
             await startPlayback(directUrl);
         }
 
@@ -3157,10 +3233,28 @@
             return isSeries ? prov.tv(cleanId, season, episode) : prov.movie(cleanId);
         }
 
+        function renderEmbedProviderPills() {
+            const container = document.getElementById('embedProviderPills');
+            if (!container) return;
+            const providers = [
+                { key: 'filmu', label: 'Filmu' },
+                { key: 'cinezo', label: 'Cinezo' },
+                { key: 'vidbolt', label: 'Vidbolt' },
+                { key: 'vidy', label: 'Vidy' },
+                { key: 'vidrift', label: 'Vidrift' }
+            ];
+            container.innerHTML = providers.map(p => {
+                const isActive = p.key === currentEmbedProvider;
+                const cls = isActive
+                    ? 'embed-pill px-2.5 py-0.5 rounded-lg text-xs font-bold transition-all bg-indigo-600 text-white shadow-sm'
+                    : 'embed-pill px-2.5 py-0.5 rounded-lg text-xs font-semibold transition-all text-zinc-400 hover:text-white hover:bg-white/10';
+                return `<button type="button" onclick="switchEmbedProvider('${p.key}')" class="${cls}" data-provider="${p.key}">${p.label}</button>`;
+            }).join('');
+        }
+
         function loadEmbedStream(providerKey) {
             currentEmbedProvider = providerKey || currentEmbedProvider || 'filmu';
-            const select = document.getElementById('embedProviderSelect');
-            if (select) select.value = currentEmbedProvider;
+            renderEmbedProviderPills();
 
             const embedUrl = resolveEmbedUrl(currentEmbedProvider);
             const iframe = document.getElementById('embedIframe');
@@ -3175,7 +3269,9 @@
         }
 
         function switchEmbedProvider(providerKey) {
-            loadEmbedStream(providerKey);
+            currentEmbedProvider = providerKey || 'filmu';
+            renderEmbedProviderPills();
+            loadEmbedStream(currentEmbedProvider);
         }
 
         function updateEngineToggleUI(mode) {
@@ -3213,15 +3309,23 @@
 
                 if (video) {
                     video.pause();
+                    video.style.display = 'none';
                     video.classList.add('hidden');
                 }
                 if (hlsPlayerInstance) {
                     hlsPlayerInstance.destroy();
                     hlsPlayerInstance = null;
                 }
+                clearPlaybackStallTimer();
 
-                if (embed) embed.classList.remove('hidden');
-                if (providerContainer) providerContainer.classList.remove('hidden');
+                if (embed) {
+                    embed.style.display = 'block';
+                    embed.classList.remove('hidden');
+                }
+                if (providerContainer) {
+                    providerContainer.classList.remove('hidden');
+                    renderEmbedProviderPills();
+                }
                 if (headerAudio) headerAudio.classList.add('hidden');
                 if (controlsContainer) controlsContainer.classList.add('hidden');
 
@@ -3235,6 +3339,7 @@
 
             if (embed) {
                 embed.src = '';
+                embed.style.display = 'none';
                 embed.classList.add('hidden');
             }
             if (providerContainer) providerContainer.classList.add('hidden');
@@ -3242,6 +3347,7 @@
             if (controlsContainer) controlsContainer.classList.remove('hidden');
 
             if (video) {
+                video.style.display = 'block';
                 video.classList.remove('hidden');
                 const target = currentDirectUrl || currentStreamUrl;
                 if (target) {
@@ -3308,9 +3414,11 @@
             if (!video) return;
 
             // Ensure direct video viewport is active
-            if (video.classList.contains('hidden')) video.classList.remove('hidden');
-            if (embed && !embed.classList.contains('hidden')) {
+            video.style.display = 'block';
+            video.classList.remove('hidden');
+            if (embed) {
                 embed.src = '';
+                embed.style.display = 'none';
                 embed.classList.add('hidden');
             }
             currentPlayerMode = 'direct';
@@ -3329,58 +3437,51 @@
 
             const urlLower = (url || '').toLowerCase();
             const isAlreadyHls = urlLower.includes('.m3u8') || url.includes('/api/hls/');
-            const isMkv = urlLower.includes('.mkv') || (currentAudioProbeData?.container && String(currentAudioProbeData.container).toLowerCase().includes('mkv'));
-            const isNonAac = currentAudioProbeData && (
-                isUnsupportedBrowserCodec(currentAudioProbeData.detected_codec) ||
-                (currentAudioProbeData.audio_tracks && currentAudioProbeData.audio_tracks.some(t => isUnsupportedBrowserCodec(t.codec)))
-            );
 
-            // Determine target playback URL: Route MKV or non-AAC directly into HLS transmuxer
-            let playUrl = url;
-            let shouldUseHls = isAlreadyHls;
-
-            if (!isAlreadyHls && (isMkv || isNonAac)) {
-                playUrl = `${API_BASE}/api/hls/master.m3u8?url=${encodeURIComponent(url)}&track=${selectedAudioTrackIndex}`;
-                shouldUseHls = true;
-                console.log('MKV or Non-AAC stream detected -> routing to HLS transmuxer:', playUrl);
+            // Ensure audio probe data exists if possible
+            if (!currentAudioProbeData && !isAlreadyHls) {
+                try {
+                    await fetchAudioProbe(url);
+                } catch (e) {}
             }
 
-            // CRITICAL FIX: Eliminate forced automatic ejection to VLC!
-            video.onerror = (e) => {
-                console.warn('HTML5 Video Codec Notice/Error:', video.error ? video.error.code : 'unknown', 'URL:', playUrl);
-                // If direct playback encountered an error and was not already using HLS transmuxer, try HLS transmuxer before displaying notice
-                if (!playUrl.includes('/api/hls/')) {
-                    const hlsFallbackUrl = `${API_BASE}/api/hls/master.m3u8?url=${encodeURIComponent(url)}&track=${selectedAudioTrackIndex}`;
-                    console.log('Direct HTML5 playback error. Auto-falling back to HLS transmuxer:', hlsFallbackUrl);
-                    loadHlsStream(hlsFallbackUrl, video.currentTime || resumeTime || 0);
-                    return;
-                }
+            const isMkv = urlLower.includes('.mkv') || (currentAudioProbeData?.container && String(currentAudioProbeData.container).toUpperCase().includes('MKV'));
+            const tracks = currentAudioProbeData?.audio_tracks || currentAudioProbeData?.tracks || [];
+            const isMultiTrack = Array.isArray(tracks) && tracks.length > 1;
+            const isUnsupportedAudio = currentAudioProbeData && (
+                isUnsupportedBrowserCodec(currentAudioProbeData.detected_codec) ||
+                (Array.isArray(tracks) && tracks.some(t => isUnsupportedBrowserCodec(t.codec)))
+            );
 
-                // If HLS also had an issue, display clean in-player controls without closing player or forcing VLC!
-                const badge = document.getElementById('playerStreamBadge');
-                if (badge) {
-                    badge.innerHTML = `
-                        <span class="text-amber-400 font-mono text-xs">⚠️ Codec stream requires transcode or fallback.</span>
-                        <button onclick="switchPlaybackEngine('transcode')" class="ml-2 px-2.5 py-1 rounded bg-indigo-600 text-white font-bold text-xs hover:bg-indigo-500 transition-colors shadow">
-                            🔄 Smart Transcode
-                        </button>
-                        <button onclick="switchPlayerMode('embed')" class="ml-2 px-2.5 py-1 rounded bg-purple-600 text-white font-bold text-xs hover:bg-purple-500 transition-colors shadow">
-                            🎬 Embed Fallback
-                        </button>
-                        <button onclick="openExternalVLC('${url.replace(/'/g, "\\'")}')" class="ml-2 px-2.5 py-1 rounded bg-orange-600 text-white font-bold text-xs hover:bg-orange-500 transition-colors shadow">
-                            ▲ Launch in VLC
-                        </button>
-                    `;
-                }
-            };
-
-            if (shouldUseHls) {
-                loadHlsStream(playUrl, resumeTime);
+            // Container Routing:
+            // 1. .m3u8 -> Direct Hls.js load
+            if (isAlreadyHls) {
+                console.log('Routing direct .m3u8 to Hls.js:', url);
+                loadHlsStream(url, resumeTime);
                 return;
             }
 
-            // Direct native stream playback for MP4 with standard AAC
-            video.src = playUrl;
+            // 2. .mkv or multi-track audio -> HLS transmuxer
+            if (isMkv || isMultiTrack || isUnsupportedAudio) {
+                const transmuxUrl = `${API_BASE}/api/hls/master.m3u8?url=${encodeURIComponent(url)}&track=${selectedAudioTrackIndex}`;
+                console.log('MKV or multi-track stream detected -> routing to HLS transmuxer:', transmuxUrl);
+                loadHlsStream(transmuxUrl, resumeTime);
+                return;
+            }
+
+            // 3. Native .mp4 with AAC -> HTML5 <video src=url>
+            console.log('Native MP4/AAC stream detected -> routing to HTML5 video:', url);
+            setupStallDetection(video);
+
+            video.onerror = async (e) => {
+                console.warn('HTML5 Video Codec Error:', video.error ? video.error.code : 'unknown', 'URL:', url);
+                // Attempt on-demand HLS transmuxer before failing over
+                const hlsFallbackUrl = `${API_BASE}/api/hls/master.m3u8?url=${encodeURIComponent(url)}&track=${selectedAudioTrackIndex}`;
+                console.log('HTML5 playback error. Auto-falling back to HLS transmuxer:', hlsFallbackUrl);
+                loadHlsStream(hlsFallbackUrl, video.currentTime || resumeTime || 0);
+            };
+
+            video.src = url;
             video.load();
             if (resumeTime > 0) {
                 video.addEventListener('loadedmetadata', () => {
@@ -3403,49 +3504,56 @@
             const video = document.getElementById('videoElement');
             if (!video) return;
 
+            clearPlaybackStallTimer();
+
             if (hlsPlayerInstance) {
                 hlsPlayerInstance.destroy();
                 hlsPlayerInstance = null;
             }
 
+            setupStallDetection(video);
+
             if (typeof Hls !== 'undefined' && Hls.isSupported()) {
                 const hls = new Hls({
                     maxBufferLength: 30,
                     maxMaxBufferLength: 600,
-                    maxBufferSize: 60 * 1000 * 1000,
+                    maxBufferSize: 60000000,
+                    backBufferLength: 90,
+                    enableWorker: true,
                     abrBandWidthFactor: 0.65,
                     abrBandWidthUpFactor: 0.5,
-                    enableWorker: true,
-                    lowLatencyMode: false,
-                    startPosition: resumeTime > 0 ? resumeTime : -1
+                    progressive: true
                 });
                 hlsPlayerInstance = hls;
                 hls.loadSource(hlsUrl);
                 hls.attachMedia(video);
 
                 hls.on(Hls.Events.MANIFEST_PARSED, () => {
-                    if (resumeTime > 0 && hls.config.startPosition < 0) {
+                    if (resumeTime > 0) {
                         try { video.currentTime = resumeTime; } catch (e) {}
                     }
                     video.play().catch(e => console.log('HLS.js autoplay notice:', e));
                     initWebAudio();
                 });
 
-                hls.on(Hls.Events.ERROR, (event, data) => {
-                    console.warn('HLS.js event notice:', data.type, data.details);
+                hls.on(Hls.Events.ERROR, async (event, data) => {
+                    console.warn('HLS.js event notice:', data.type, data.details, 'fatal:', data.fatal);
                     if (data.fatal) {
                         switch (data.type) {
                             case Hls.ErrorTypes.NETWORK_ERROR:
-                                console.log('HLS network error, recovering...');
+                                console.log('HLS network error, attempting recovery...');
                                 hls.startLoad();
                                 break;
                             case Hls.ErrorTypes.MEDIA_ERROR:
-                                console.log('HLS media error, recovering...');
+                                console.log('HLS media error, attempting recovery...');
                                 hls.recoverMediaError();
                                 break;
                             default:
-                                console.warn('HLS unrecoverable error:', data);
+                                console.warn('HLS unrecoverable fatal error:', data.details);
                                 hls.destroy();
+                                hlsPlayerInstance = null;
+                                clearPlaybackStallTimer();
+                                await fallbackToNextMirrorOrEmbed(`Stream error: ${data.details || data.type}`);
                                 break;
                         }
                     }
@@ -3469,6 +3577,7 @@
         }
 
         function closeVideoPlayer() {
+            clearPlaybackStallTimer();
             const overlay = document.getElementById('playerOverlay');
             const video = document.getElementById('videoElement');
             const embed = document.getElementById('embedIframe');
@@ -3485,12 +3594,14 @@
             }
             if (embed) {
                 embed.src = '';
+                embed.style.display = 'none';
                 embed.classList.add('hidden');
             }
             if (video) {
                 video.pause();
                 video.removeAttribute('src');
                 video.load();
+                video.style.display = 'block';
                 video.classList.remove('hidden');
             }
             overlay.classList.add('hidden');

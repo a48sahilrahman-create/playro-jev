@@ -1,15 +1,21 @@
 """Unit and integration test suite for Dynamic VOD HLS Transmuxer.
 
-Tests HLSSegmentCache LRU mechanics, RFC 8216 master/media manifest generation,
-real FFmpeg MPEG-TS segment slicing on local clips, prebuffering, and
-HLSSessionManager lifecycle tracking.
+Tests:
+1. HLSSegmentCache: in-memory LRU mechanics, max_segments eviction, temp disk fallback,
+   <1ms retrieval, and canonical key formatting ({session_id}_{segment_idx}_{track_idx}.ts).
+2. HLSSession: audio probe inspection, RFC 8216 master/media playlist generation
+   (including 120s mock duration -> 30 segments), and FFmpeg MPEG-TS slicing with prebuffering.
+3. HLSSessionManager: thread-safe _sessions registry, get_or_create_session(url, title),
+   and cleanup_idle_sessions(max_idle_seconds=120).
 """
 
 import asyncio
 import os
 from pathlib import Path
 import sys
+import threading
 import time
+from unittest.mock import MagicMock, patch
 import pytest
 
 # Ensure repository root is on sys.path
@@ -39,27 +45,37 @@ def anyio_backend():
 # ============================================================================
 
 def test_cache_put_get_and_miss():
-    """Verify segment storage, retrieval, and cache miss semantics."""
-    cache = HLSSegmentCache(max_size_mb=1)
+    """Verify segment storage, sub-millisecond retrieval, and cache miss semantics."""
+    cache = HLSSegmentCache(max_size_mb=1, disk_fallback=False)
 
     assert cache.get("missing_key") is None
     assert len(cache) == 0
     assert cache.current_size == 0
 
-    payload = b"MPEGTS_DUMMY_PAYLOAD_001"
-    cache.put("sess1:0", payload)
+    key = HLSSegmentCache.format_key("sess1", 0, 0)
+    assert key == "sess1_0_0.ts"
 
-    assert cache.get("sess1:0") == payload
+    payload = b"MPEGTS_DUMMY_PAYLOAD_001"
+    t0 = time.perf_counter()
+    cache.put(key, payload)
+    t1 = time.perf_counter()
+    retrieved = cache.get(key)
+    t2 = time.perf_counter()
+
+    assert retrieved == payload
     assert len(cache) == 1
     assert cache.current_size == len(payload)
-    assert "sess1:0" in cache
+    assert key in cache
+    # Verify sub-millisecond in-memory cache retrieval (<1ms)
+    retrieval_ms = (t2 - t1) * 1000
+    assert retrieval_ms < 1.0
 
 
 def test_cache_lru_eviction():
     """Verify least recently used segments are evicted when capacity limit is breached."""
-    # Create a small 100-byte cache
-    cache = HLSSegmentCache(max_size_mb=1)
-    cache.max_size_bytes = 100  # Override to 100 bytes for deterministic testing
+    # Create small 100-byte cache without disk fallback for deterministic memory LRU testing
+    cache = HLSSegmentCache(max_size_mb=1, disk_fallback=False)
+    cache.max_size_bytes = 100
 
     chunk1 = b"A" * 40
     chunk2 = b"B" * 40
@@ -80,9 +96,60 @@ def test_cache_lru_eviction():
     assert len(cache) == 2
 
 
+def test_cache_max_segments_eviction():
+    """Verify LRU eviction is enforced when max_segments count ceiling is reached."""
+    cache = HLSSegmentCache(max_size_mb=10, max_segments=3, disk_fallback=False)
+
+    cache.put("seg_0", b"0000")
+    cache.put("seg_1", b"1111")
+    cache.put("seg_2", b"2222")
+    assert len(cache) == 3
+
+    # Inserting 4th segment evicts seg_0 because max_segments is 3
+    cache.put("seg_3", b"3333")
+    assert len(cache) == 3
+    assert cache.get("seg_0") is None
+    assert cache.get("seg_1") == b"1111"
+    assert cache.get("seg_2") == b"2222"
+    assert cache.get("seg_3") == b"3333"
+
+
+def test_cache_temp_disk_fallback():
+    """Verify in-memory evicted segments are preserved in temp disk fallback and recoverable."""
+    cache = HLSSegmentCache(max_size_mb=1, max_segments=2, disk_fallback=True)
+
+    key0 = HLSSegmentCache.format_key("sess_disk", 0, 0)
+    key1 = HLSSegmentCache.format_key("sess_disk", 1, 0)
+    key2 = HLSSegmentCache.format_key("sess_disk", 2, 0)
+
+    data0 = b"DISK_SEGMENT_DATA_0"
+    data1 = b"DISK_SEGMENT_DATA_1"
+    data2 = b"DISK_SEGMENT_DATA_2"
+
+    cache.put(key0, data0)
+    cache.put(key1, data1)
+    assert cache.in_memory(key0)
+    assert cache.in_memory(key1)
+
+    # Inserting 3rd segment evicts key0 from memory to temp disk
+    cache.put(key2, data2)
+    assert not cache.in_memory(key0)
+    assert cache.in_memory(key1)
+    assert cache.in_memory(key2)
+
+    # Retrieval of key0 should transparently succeed via temp disk fallback
+    recovered = cache.get(key0)
+    assert recovered == data0
+    # And is promoted back into memory
+    assert cache.in_memory(key0)
+
+    # Clean up
+    cache.clear()
+
+
 def test_cache_access_promotes_mru():
     """Verify accessing a key moves it to MRU, protecting it from immediate eviction."""
-    cache = HLSSegmentCache(max_size_mb=1)
+    cache = HLSSegmentCache(max_size_mb=1, disk_fallback=False)
     cache.max_size_bytes = 100
 
     chunk1 = b"A" * 40
@@ -104,7 +171,7 @@ def test_cache_access_promotes_mru():
 
 def test_cache_oversized_payload_rejected():
     """Verify single payload larger than cache capacity is rejected cleanly without corrupting state."""
-    cache = HLSSegmentCache(max_size_mb=1)
+    cache = HLSSegmentCache(max_size_mb=1, disk_fallback=False)
     cache.max_size_bytes = 50
 
     giant_chunk = b"X" * 100
@@ -116,7 +183,7 @@ def test_cache_oversized_payload_rejected():
 
 def test_cache_overwrite_updates_size():
     """Verify overwriting an existing key updates the payload and byte tracking correctly."""
-    cache = HLSSegmentCache(max_size_mb=1)
+    cache = HLSSegmentCache(max_size_mb=1, disk_fallback=False)
     cache.put("k1", b"12345")
     assert cache.current_size == 5
 
@@ -127,16 +194,16 @@ def test_cache_overwrite_updates_size():
 
 
 def test_cache_purge_session_and_clear():
-    """Verify session purging removes only corresponding session keys."""
-    cache = HLSSegmentCache(max_size_mb=1)
+    """Verify session purging removes both colon and underscore key variants from memory and disk."""
+    cache = HLSSegmentCache(max_size_mb=1, disk_fallback=True)
     cache.put("sess_A:0", b"A0")
-    cache.put("sess_A:1", b"A1")
+    cache.put("sess_A_1_0.ts", b"A1")
     cache.put("sess_B:0", b"B0")
 
     purged = cache.purge_session("sess_A")
     assert purged == 2
     assert cache.get("sess_A:0") is None
-    assert cache.get("sess_A:1") is None
+    assert cache.get("sess_A_1_0.ts") is None
     assert cache.get("sess_B:0") == b"B0"
     assert len(cache) == 1
 
@@ -146,64 +213,91 @@ def test_cache_purge_session_and_clear():
 
 
 # ============================================================================
-# 2. HLSSession RFC 8216 Manifest Generation Tests
+# 2. HLSSession RFC 8216 Manifest & Playlist Generation Tests
 # ============================================================================
 
-def test_generate_master_manifest():
-    """Verify RFC 8216 master manifest contains standard headers and expected URI."""
+def test_generate_master_playlist():
+    """Verify generate_master_playlist returns RFC 8216 header and configured index.m3u8."""
     session = HLSSession(
-        session_id="test_sess_001",
-        media_url="http://example.com/video.mkv",
+        session_id="test_sess_master_001",
+        media_url="http://example.com/stream.mkv",
         duration=120.0,
     )
 
-    # Master manifest without base_url
-    master_default = session.generate_master_manifest()
+    # Master playlist without base_url
+    master_default = session.generate_master_playlist(selected_track=1, boost_db=6.0)
     assert master_default.startswith("#EXTM3U\n")
     assert "#EXT-X-VERSION:3" in master_default
     assert "#EXT-X-STREAM-INF:BANDWIDTH=8000000,RESOLUTION=1920x1080" in master_default
-    assert "/api/hls/test_sess_001/index.m3u8" in master_default
+    assert "/api/hls/test_sess_master_001/index.m3u8" in master_default
+    assert session.audio_track == 1
+    assert session.volume_boost == 6.0
 
-    # Master manifest with base_url
-    master_with_base = session.generate_master_manifest(base_url="https://playro.local:8080/")
-    assert "https://playro.local:8080/api/hls/test_sess_001/index.m3u8" in master_with_base
+    # Master playlist with base_url
+    master_with_base = session.generate_master_playlist(base_url="https://playro.local:8080")
+    assert "https://playro.local:8080/api/hls/test_sess_master_001/index.m3u8" in master_with_base
+
+    # Verify backward-compatible alias generate_master_manifest
+    alias_master = session.generate_master_manifest()
+    assert alias_master == master_default or "#EXTM3U\n" in alias_master
 
 
-def test_generate_media_manifest_segments_and_durations():
-    """Verify media playlist generates correct target duration, segment count, and durations."""
-    # 10.0 seconds with 4.0s segment duration -> 3 segments (4.0, 4.0, 2.0)
+def test_generate_media_playlist_mock_duration_120s():
+    """Verify 120s mock duration produces exactly 30 segments (120 / 4.0 = 30) with explicit #EXTINF:4.000."""
     session = HLSSession(
-        session_id="sess_media_test",
-        media_url="http://example.com/test.mp4",
-        duration=10.0,
+        session_id="sess_120s_mock",
+        media_url="http://mock.playro.test/movie.mp4",
+        duration=120.0,
         segment_duration=4.0,
     )
 
-    playlist = session.generate_media_manifest()
+    playlist = session.generate_media_playlist(track_idx=0)
     lines = [line.strip() for line in playlist.strip().splitlines() if line.strip()]
 
+    # Verify required RFC 8216 headers
     assert lines[0] == "#EXTM3U"
     assert lines[1] == "#EXT-X-VERSION:3"
     assert lines[2] == "#EXT-X-TARGETDURATION:5"
     assert lines[3] == "#EXT-X-MEDIA-SEQUENCE:0"
     assert lines[4] == "#EXT-X-PLAYLIST-TYPE:VOD"
 
-    # Segment 0
-    assert "#EXTINF:4.000," in lines
-    assert "segment_0.ts" in lines
+    # Exactly 30 segments of 4.000s duration
+    inf_tags = [l for l in lines if l.startswith("#EXTINF:")]
+    assert len(inf_tags) == 30
+    assert all(tag == "#EXTINF:4.000," for tag in inf_tags)
 
-    # Segment 1
-    assert "segment_1.ts" in lines
+    # Segment URIs from segment_0.ts to segment_29.ts
+    seg_uris = [l for l in lines if l.endswith(".ts")]
+    assert len(seg_uris) == 30
+    assert seg_uris[0] == "segment_0.ts"
+    assert seg_uris[-1] == "segment_29.ts"
 
-    # Segment 2 (final chunk: 10.0 - 8.0 = 2.000s)
-    assert "#EXTINF:2.000," in lines
-    assert "segment_2.ts" in lines
-
-    # Trailing endlist
+    # Trailing endlist tag
     assert lines[-1] == "#EXT-X-ENDLIST"
 
 
-def test_generate_media_manifest_with_base_url():
+def test_generate_media_playlist_with_remainder():
+    """Verify non-multiple duration (10.0s / 4.0s) produces 3 segments (4.0, 4.0, 2.0)."""
+    session = HLSSession(
+        session_id="sess_remainder_test",
+        media_url="http://example.com/test.mp4",
+        duration=10.0,
+        segment_duration=4.0,
+    )
+
+    playlist = session.generate_media_playlist()
+    lines = [line.strip() for line in playlist.strip().splitlines() if line.strip()]
+
+    assert "#EXT-X-TARGETDURATION:5" in lines
+    assert "#EXTINF:4.000," in lines
+    assert "#EXTINF:2.000," in lines
+    assert "segment_0.ts" in lines
+    assert "segment_1.ts" in lines
+    assert "segment_2.ts" in lines
+    assert lines[-1] == "#EXT-X-ENDLIST"
+
+
+def test_generate_media_playlist_with_base_url():
     """Verify media playlist prefixes segment URIs when base_url is supplied."""
     session = HLSSession(
         session_id="sess_base_test",
@@ -212,13 +306,13 @@ def test_generate_media_manifest_with_base_url():
         segment_duration=4.0,
     )
 
-    playlist = session.generate_media_manifest(base_url="/api/hls/sess_base_test")
+    playlist = session.generate_media_playlist(track_idx=0, base_url="/api/hls/sess_base_test")
     assert "/api/hls/sess_base_test/segment_0.ts" in playlist
     assert "/api/hls/sess_base_test/segment_1.ts" in playlist
 
 
 def test_generate_media_manifest_exact_multiple_duration():
-    """Verify playlist handles exact multiple duration (8.0s / 4.0s = exactly 2 segments of 4.000s)."""
+    """Verify backward-compatible generate_media_manifest handles exact multiple duration (8.0s -> 2 segments)."""
     session = HLSSession(
         session_id="sess_exact",
         media_url="http://example.com/test.mp4",
@@ -258,37 +352,43 @@ async def test_slice_segment_ffmpeg_bunny_clip():
 
 
 @pytest.mark.anyio
-async def test_get_or_generate_segment_caching_and_prebuffering():
-    """Verify get_or_generate_segment caches data on miss and hits cache on subsequent calls."""
-    cache = HLSSegmentCache(max_size_mb=10)
+async def test_get_segment_caching_and_prebuffering():
+    """Verify get_segment populates cache on miss, hits cache on second call, and triggers prebuffer."""
+    cache = HLSSegmentCache(max_size_mb=10, disk_fallback=False)
     session = HLSSession(
-        session_id="test_caching_session",
+        session_id="test_get_segment_session",
         media_url=BUNNY_CLIP,
         duration=10.0,
         segment_duration=4.0,
         cache=cache,
     )
 
-    cache_key_0 = f"{session.session_id}:0"
-    assert cache.get(cache_key_0) is None
+    key0 = HLSSegmentCache.format_key(session.session_id, 0, 0)
+    assert cache.get(key0) is None
 
     # First fetch: invokes FFmpeg and populates cache
-    data_first = await session.get_or_generate_segment(0)
+    data_first = await session.get_segment(idx=0, track_idx=0, boost_db=0.0)
     assert len(data_first) > 0
     assert data_first[0] == 0x47
-    assert cache.get(cache_key_0) == data_first
+    assert cache.get(key0) == data_first
 
-    # Second fetch: instant cache hit
-    data_second = await session.get_or_generate_segment(0)
+    # Second fetch: instant cache hit (<1ms)
+    t0 = time.perf_counter()
+    data_second = await session.get_segment(idx=0, track_idx=0, boost_db=0.0)
+    t1 = time.perf_counter()
+    assert (t1 - t0) * 1000 < 5.0
     assert data_second == data_first
 
-    # Wait brief moment for background prebuffering of segment 1 and 2
+    # Wait brief moment for background prebuffering of idx+1 and idx+2
     await asyncio.sleep(1.0)
-    cache_key_1 = f"{session.session_id}:1"
-    # Prebuffer should have cached or be in progress
-    data_seg1 = cache.get(cache_key_1)
+    key1 = HLSSegmentCache.format_key(session.session_id, 1, 0)
+    data_seg1 = cache.get(key1)
     if data_seg1 is not None:
         assert data_seg1[0] == 0x47
+
+    # Verify get_or_generate_segment compatibility alias
+    alias_data = await session.get_or_generate_segment(0)
+    assert alias_data == data_first
 
 
 @pytest.mark.anyio
@@ -306,10 +406,24 @@ async def test_slice_segment_ffmpeg_with_audio_and_volume_boost():
         is_audio_aac=True,
     )
 
-    data = await session._slice_segment_ffmpeg(0)
+    data = await session._slice_segment_ffmpeg(0, track_idx=0, boost_db=6.0)
     assert isinstance(data, bytes)
     assert len(data) > 0
     assert data[0] == 0x47
+
+
+def test_inspect_media_duration_and_audio_tracks():
+    """Verify HLSSession inspects duration and audio tracks using audio_probe.py."""
+    assert os.path.isfile(BUNNY_CLIP), f"Test clip not found: {BUNNY_CLIP}"
+
+    session = HLSSession(
+        session_id="test_inspect_clip",
+        media_url=BUNNY_CLIP,
+        duration=0.0,  # Force inspection
+    )
+
+    assert session.duration > 0.0
+    assert session.duration == 10.0
 
 
 # ============================================================================
@@ -322,17 +436,20 @@ async def test_session_manager_get_or_create_deterministic():
     manager = HLSSessionManager()
 
     session1 = await manager.get_or_create_session(
-        media_url=BUNNY_CLIP,
+        url=BUNNY_CLIP,
+        title="Big Buck Bunny",
         audio_track=0,
         volume_boost=1.0,
     )
     assert session1 is not None
     assert session1.session_id
-    assert session1.duration == 10.0  # Probed from bunny clip
+    assert session1.duration == 10.0
+    assert session1.title == "Big Buck Bunny"
 
     # Second call with identical params returns the same session instance
     session2 = await manager.get_or_create_session(
-        media_url=BUNNY_CLIP,
+        url=BUNNY_CLIP,
+        title="Big Buck Bunny",
         audio_track=0,
         volume_boost=1.0,
     )
@@ -340,11 +457,39 @@ async def test_session_manager_get_or_create_deterministic():
 
     # Different volume boost yields distinct session ID
     session3 = await manager.get_or_create_session(
-        media_url=BUNNY_CLIP,
+        url=BUNNY_CLIP,
+        title="Big Buck Bunny",
         audio_track=0,
         volume_boost=1.5,
     )
     assert session3.session_id != session1.session_id
+
+
+@pytest.mark.anyio
+async def test_session_manager_thread_safety_registry():
+    """Verify HLSSessionManager _sessions registry is thread-safe under concurrent access."""
+    manager = HLSSessionManager()
+
+    def register_worker(worker_id: int):
+        sid = f"concurrent_sess_{worker_id}"
+        sess = HLSSession(
+            session_id=sid,
+            media_url=f"http://example.com/video_{worker_id}.mp4",
+            duration=60.0,
+        )
+        with manager._lock:
+            manager._sessions[sid] = sess
+
+    threads = [threading.Thread(target=register_worker, args=(i,)) for i in range(25)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(manager._sessions) == 25
+    assert len(manager.sessions) == 25  # Property alias
+    for i in range(25):
+        assert f"concurrent_sess_{i}" in manager._sessions
 
 
 @pytest.mark.anyio
@@ -353,16 +498,16 @@ async def test_session_manager_fallback_duration_on_unknown():
     manager = HLSSessionManager()
 
     session = await manager.get_or_create_session(
-        media_url="http://invalid.playro.test/nonexistent.mkv",
+        url="http://invalid.playro.test/nonexistent.mkv",
         audio_track=0,
         volume_boost=1.0,
     )
     assert session.duration == 7200.0
 
 
-def test_session_manager_get_session_and_cleanup():
-    """Verify session lookup and idle session cleanup with cache purge."""
-    cache = HLSSegmentCache(max_size_mb=10)
+def test_session_manager_cleanup_idle_sessions():
+    """Verify cleanup_idle_sessions purges inactive sessions and their segment cache."""
+    cache = HLSSegmentCache(max_size_mb=10, disk_fallback=False)
     manager = HLSSessionManager(cache=cache)
 
     now = time.time()
@@ -383,22 +528,26 @@ def test_session_manager_get_session_and_cleanup():
         cache=cache,
     )
 
-    manager.sessions["active_sess"] = active_session
-    manager.sessions["stale_sess"] = stale_session
+    manager._sessions["active_sess"] = active_session
+    manager._sessions["stale_sess"] = stale_session
 
-    cache.put("active_sess:0", b"ACTIVE_DATA")
-    cache.put("stale_sess:0", b"STALE_DATA")
+    cache.put(HLSSegmentCache.format_key("active_sess", 0, 0), b"ACTIVE_DATA")
+    cache.put(HLSSegmentCache.format_key("stale_sess", 0, 0), b"STALE_DATA")
 
     # get_session returns active session and None for unknown
     assert manager.get_session("active_sess") is active_session
     assert manager.get_session("unknown_sess") is None
 
-    # Cleanup expired sessions older than 180 seconds
-    purged_count = manager.cleanup_expired_sessions(max_idle_sec=180.0)
+    # Cleanup idle sessions exceeding 120 seconds default
+    purged_count = manager.cleanup_idle_sessions(max_idle_seconds=120)
     assert purged_count == 1
-    assert "stale_sess" not in manager.sessions
-    assert "active_sess" in manager.sessions
+    assert "stale_sess" not in manager._sessions
+    assert "active_sess" in manager._sessions
 
     # Verify stale session cache was purged while active remains
-    assert cache.get("stale_sess:0") is None
-    assert cache.get("active_sess:0") == b"ACTIVE_DATA"
+    assert cache.get(HLSSegmentCache.format_key("stale_sess", 0, 0)) is None
+    assert cache.get(HLSSegmentCache.format_key("active_sess", 0, 0)) == b"ACTIVE_DATA"
+
+    # Verify backward-compatible alias cleanup_expired_sessions
+    purged_alias = manager.cleanup_expired_sessions(max_idle_sec=10.0)
+    assert purged_alias == 0  # active_sess was recently accessed

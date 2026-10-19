@@ -13,7 +13,7 @@ Verifies:
 import sys
 import math
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, patch, MagicMock
 import pytest
 import httpx
 
@@ -324,3 +324,184 @@ async def test_embed_sources_missing_id(client: httpx.AsyncClient):
     """Verify missing ID returns 400 Bad Request."""
     res = await client.get("/api/embed/sources", params={"type": "movie", "id": ""})
     assert res.status_code in (400, 422)
+
+
+# ============================================================================
+# 7. Additional HLS Mock Session, Cascade POST, and VLC Hardening Tests
+# ============================================================================
+
+@pytest.mark.anyio
+async def test_hls_master_manifest_mock_session(client: httpx.AsyncClient):
+    """Verify master manifest route with a mocked HLSSessionManager session."""
+    mock_session = MagicMock()
+    mock_session.generate_master_manifest.return_value = (
+        "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-STREAM-INF:BANDWIDTH=8000000\nhttp://testserver/api/hls/sess_mock/index.m3u8\n"
+    )
+
+    with patch.object(HLS_SESSION_MANAGER, "get_or_create_session", new=AsyncMock(return_value=mock_session)):
+        res = await client.get("/api/hls/master.m3u8", params={"url": "https://cdn.example/vid.mkv", "track": 1, "boost": 1.5})
+
+    assert res.status_code == 200
+    assert "application/vnd.apple.mpegurl" in res.headers.get("content-type", "")
+    assert "/api/hls/sess_mock/index.m3u8" in res.text
+    mock_session.generate_master_manifest.assert_called_once()
+
+
+@pytest.mark.anyio
+async def test_hls_segment_with_track_and_boost(client: httpx.AsyncClient):
+    """Verify segment delivery accepts track and boost query parameters and passes headers."""
+    session_id = "test_sess_seg_track_boost"
+    session = HLSSession(
+        session_id=session_id,
+        media_url="https://cdn.example.com/movie.mp4",
+        duration=60.0,
+        segment_duration=4.0
+    )
+    HLS_SESSION_MANAGER.sessions[session_id] = session
+
+    expected_bytes = b"G@\x10\x11TEST_MPEGTS_WITH_BOOST_PAYLOAD"
+    with patch.object(session, "get_or_generate_segment", new=AsyncMock(return_value=expected_bytes)):
+        res = await client.get(f"/api/hls/{session_id}/segment_2.ts", params={"track": 1, "boost": 1.5})
+
+    assert res.status_code == 200
+    assert res.headers.get("content-type") == "video/mp2t"
+    assert "public, max-age=3600" in res.headers.get("cache-control", "")
+    assert res.content == expected_bytes
+    assert session.audio_track == 1
+    assert session.volume_boost == 1.5
+
+
+@pytest.mark.anyio
+async def test_playback_cascade_post_candidates(client: httpx.AsyncClient):
+    """Verify POST /api/playback/cascade accepts candidate list and returns cascade result with embed_fallback."""
+    candidates = [
+        {"title": "The Matrix (1999) 2160p", "target_url": "https://fast.cdn/matrix_4k.mkv", "size": "18.0 GB"},
+        {"title": "The Matrix (1999) 1080p", "target_url": "https://backup.cdn/matrix_1080p.mp4", "size": "4.5 GB"}
+    ]
+
+    mock_cascade_result = {
+        "status": "SUCCESS",
+        "primary": {
+            "title": "The Matrix (1999) 2160p",
+            "direct_url": "https://fast.cdn/matrix_4k.mkv",
+            "ttfb_ms": 75.0,
+            "verified": True,
+            "format": "MKV",
+            "size": "18.0 GB"
+        },
+        "waterfall": [
+            {
+                "title": "The Matrix (1999) 1080p",
+                "direct_url": "https://backup.cdn/matrix_1080p.mp4",
+                "ttfb_ms": 130.0,
+                "verified": True,
+                "format": "MP4",
+                "size": "4.5 GB"
+            }
+        ],
+        "candidates_tested": 2
+    }
+
+    with patch("main.resolve_stream_cascade", new=AsyncMock(return_value=mock_cascade_result)):
+        res = await client.post("/api/playback/cascade", json={"candidates": candidates, "title": "The Matrix", "imdb_id": "tt0133093"})
+
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "SUCCESS"
+    assert data["primary"]["direct_url"] == "https://fast.cdn/matrix_4k.mkv"
+    assert len(data["waterfall"]) == 1
+    assert "embed_fallback" in data
+    assert data["embed_fallback"] is not None
+    assert "tt0133093" in data["embed_fallback"]["embed_url"]
+
+
+@pytest.mark.anyio
+async def test_playback_cascade_get_with_title_and_year(client: httpx.AsyncClient):
+    """Verify GET /api/playback/cascade accepts title and year query parameters."""
+    mock_cascade = {
+        "status": "SUCCESS",
+        "primary": {
+            "title": "Inception (2010)",
+            "direct_url": "https://cdn.example/inception.mkv",
+            "ttfb_ms": 50.0,
+            "verified": True
+        },
+        "waterfall": [],
+        "candidates_tested": 1
+    }
+
+    with patch("main.cascade_search_and_resolve", new=AsyncMock(return_value=mock_cascade)):
+        res = await client.get("/api/playback/cascade", params={"title": "Inception", "year": "2010"})
+
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "SUCCESS"
+    assert data["primary"]["direct_url"] == "https://cdn.example/inception.mkv"
+    assert "embed_fallback" in data
+
+
+@pytest.mark.anyio
+async def test_embed_sources_by_title_and_year(client: httpx.AsyncClient):
+    """Verify GET /api/embed/sources accepts title, year, season, episode and returns all 5 provider embed URLs."""
+    res = await client.get("/api/embed/sources", params={"title": "Breaking Bad", "year": "2008", "season": 1, "episode": 1})
+    assert res.status_code == 200
+    data = res.json()
+
+    assert "all_providers" in data
+    assert "sources" in data
+    for provider in ("filmu", "cinezo", "vidbolt", "vidy", "vidrift"):
+        assert provider in data["all_providers"]
+        assert provider in data["sources"]
+        assert "/1/1" in data["all_providers"][provider]
+
+
+@pytest.mark.anyio
+async def test_vlc_play_verification_rejection_invalid_link(client: httpx.AsyncClient):
+    """Verify /api/vlc/play rejects dead stream links with 400 when StreamVerifier reports invalid."""
+    dead_url = "https://dead-server.com/unreachable_media.mp4"
+
+    mock_resolve = {"status": "SUCCESS", "direct_url": dead_url}
+    mock_verify = {"valid": False, "error": "Stream not reachable or quota exceeded"}
+
+    with patch("main.link_resolver.resolve_auto", new=AsyncMock(return_value=mock_resolve)), \
+         patch("main.stream_verifier.verify", new=AsyncMock(return_value=mock_verify)):
+
+        res = await client.get("/api/vlc/play", params={"url": dead_url, "title": "Dead Stream"})
+
+    assert res.status_code == 400
+    data = res.json()
+    assert data["status"] == "ERROR"
+    assert data["error"] == "Stream verification failed: media file is unavailable or quota exceeded"
+
+
+@pytest.mark.anyio
+async def test_vlc_play_cdn_worker_headers_injected(client: httpx.AsyncClient):
+    """Verify VLC process args contain :http-user-agent and :http-referrer on Cloudflare Worker CDN links."""
+    worker_url = "https://stream-proxy.workers.dev/video.mp4"
+
+    mock_resolve = {"status": "SUCCESS", "direct_url": worker_url}
+    mock_verify = {"valid": True, "format": "MP4", "size": "1.5 GB"}
+
+    with patch("main.link_resolver.resolve_auto", new=AsyncMock(return_value=mock_resolve)), \
+         patch("main.stream_verifier.verify", new=AsyncMock(return_value=mock_verify)), \
+         patch("subprocess.Popen") as mock_popen:
+
+        mock_popen.return_value = MagicMock()
+        res = await client.get("/api/vlc/play", params={"url": worker_url, "title": "CDN Video"})
+
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "SUCCESS"
+    assert mock_popen.called
+
+    spawn_args = mock_popen.call_args[0][0]
+    # Verify User-Agent injection
+    ua_args = [a for a in spawn_args if a.startswith(":http-user-agent=")]
+    assert len(ua_args) == 1
+    assert "Mozilla/5.0" in ua_args[0]
+
+    # Verify Referrer injection
+    ref_args = [a for a in spawn_args if a.startswith(":http-referrer=")]
+    assert len(ref_args) == 1
+    assert "workers.dev" in ref_args[0]
+

@@ -713,7 +713,8 @@ def filter_episode_streams(releases: list, season: int, episode: int) -> list:
             continue
         if re.search(batch_kw_pattern, label, re.I) or re.search(batch_kw_pattern, ep_tag, re.I):
             continue
-        if re.search(batch_kw_pattern, title, re.I):
+        has_exact_ep = bool(re.search(exact_se_pat, ep_tag, re.I) or re.search(exact_se_pat, label, re.I) or re.search(exact_ep_in_lbl, label, re.I))
+        if not has_exact_ep and re.search(batch_kw_pattern, title, re.I):
             continue
 
         # 2. Rejects any release if label contains a conflicting season (e.g. S02, S03, S04 when looking for Season 1)

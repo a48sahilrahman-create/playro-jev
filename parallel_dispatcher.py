@@ -291,7 +291,8 @@ except ImportError:
 
 class _FastScraperFleetAdapter:
     """Fleet adapter wrapping FastScrapers to support season/episode parameters,
-    platform tagging ('UHDMovies', '4KHDHub', 'HDHub4u', 'VegaMovies', 'OlaMovies'),
+    platform tagging ('UHDMovies', '4KHDHub', 'HDHub4u', 'VegaMovies', 'OlaMovies',
+    'DesireMovies', 'DDLBase', 'Nyaa', 'Bingr'),
     and graceful fallback if underlying scrapers or test mocks lack kwargs."""
     def __init__(self, raw_fs):
         self._fs = raw_fs
@@ -333,6 +334,18 @@ class _FastScraperFleetAdapter:
 
     async def search_olamovies(self, client: httpx.AsyncClient, query: str, season: Optional[int] = None, episode: Optional[int] = None) -> list:
         return await self._execute("search_olamovies", "OlaMovies", client, query, season=season, episode=episode)
+
+    async def search_desiremovies(self, client: httpx.AsyncClient, query: str, season: Optional[int] = None, episode: Optional[int] = None) -> list:
+        return await self._execute("search_desiremovies", "DesireMovies", client, query, season=season, episode=episode)
+
+    async def search_ddlbase(self, client: httpx.AsyncClient, query: str, season: Optional[int] = None, episode: Optional[int] = None) -> list:
+        return await self._execute("search_ddlbase", "DDLBase", client, query, season=season, episode=episode)
+
+    async def search_nyaa(self, client: httpx.AsyncClient, query: str, season: Optional[int] = None, episode: Optional[int] = None) -> list:
+        return await self._execute("search_nyaa", "Nyaa", client, query, season=season, episode=episode)
+
+    async def search_bingr(self, client: httpx.AsyncClient, query: str, season: Optional[int] = None, episode: Optional[int] = None) -> list:
+        return await self._execute("search_bingr", "Bingr", client, query, season=season, episode=episode)
 
     def __getattr__(self, name):
         return getattr(self._fs, name)
@@ -611,7 +624,7 @@ class ParallelMediaDispatcher:
         FLEET_SOURCE_TIMEOUT = 8.0  # seconds per source
         is_series_query = bool(season is not None or episode is not None or re.search(r'\b(season|series|episode|ep|s\d+|e\d+|\d+x\d+)\b', query, re.I))
 
-        # Yield high-speed FastScrapers immediately (UHDMovies, 4KHDHub, HDHub4u, VegaMovies, OlaMovies)
+        # Yield high-speed FastScrapers immediately (UHDMovies, 4KHDHub, HDHub4u, VegaMovies, OlaMovies, DesireMovies, DDLBase, Nyaa, Bingr)
         async with httpx.AsyncClient(http2=True, limits=self.limits, follow_redirects=True) as client:
             from fast_scrapers import FastScrapers
             fs = _FastScraperFleetAdapter(FastScrapers())
@@ -622,6 +635,10 @@ class ParallelMediaDispatcher:
                 fs.search_hdhub4u(client, query, season=season, episode=episode),
                 fs.search_vegamovies(client, query, season=season, episode=episode),
                 fs.search_olamovies(client, query, season=season, episode=episode),
+                fs.search_desiremovies(client, query, season=season, episode=episode),
+                fs.search_ddlbase(client, query, season=season, episode=episode),
+                fs.search_nyaa(client, query, season=season, episode=episode),
+                fs.search_bingr(client, query, season=season, episode=episode),
                 self.fetch_local_db(query)
             ]
 

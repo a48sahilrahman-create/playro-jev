@@ -63,13 +63,14 @@
   },
   "desiremovies": {
     "type": "redirect_or_probe",
+    "fallback": "https://1desiremovies.eu",
     "candidates": [
+      "https://1desiremovies.eu",
       "https://1desiremovies.rodeo",
       "https://1desiremovies.wales",
       "https://1desiremovies.nexus",
       "https://1desiremovies.cymru"
-    ],
-    "fallback": "https://1desiremovies.rodeo"
+    ]
   },
   "4khdhub": {
     "type": "redirect_or_probe",
@@ -79,5 +80,32 @@
       "https://4khdhub.cloud"
     ],
     "search_dork": "4khdhub official website"
+  },
+  "ddlbase": {
+    "type": "redirect_or_probe",
+    "fallback": "https://ddlbase.com",
+    "candidates": [
+      "https://ddlbase.com",
+      "https://ddlbase.net",
+      "https://ddlbase.org"
+    ]
+  },
+  "nyaa": {
+    "type": "redirect_or_probe",
+    "fallback": "https://nyaa.media",
+    "candidates": [
+      "https://nyaa.media",
+      "https://nyaa.si",
+      "https://nyaa.land",
+      "https://nyaa.iss.ink"
+    ]
+  },
+  "bingr": {
+    "type": "redirect_or_probe",
+    "fallback": "https://bingr.one",
+    "candidates": [
+      "https://bingr.one",
+      "https://bingr.app"
+    ]
   }
 }

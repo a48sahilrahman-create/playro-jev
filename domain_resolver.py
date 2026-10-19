@@ -7,6 +7,10 @@ Supports:
   - VegaMovies (Edge refresh / meta redirect extraction)
   - OlaMovies (Subdomain permutation & probing)
   - DesireMovies (Concurrent candidate probing & failover)
+  - 4KHDHub (Concurrent candidate probing & failover)
+  - DDLBase (Concurrent candidate probing & failover)
+  - Nyaa (Concurrent candidate probing & failover)
+  - Bingr (Concurrent candidate probing & failover)
 """
 
 import sys
@@ -90,13 +94,50 @@ EMBEDDED_REGISTRY = {
     },
     "desiremovies": {
         "type": "redirect_or_probe",
+        "fallback": "https://1desiremovies.eu",
         "candidates": [
+            "https://1desiremovies.eu",
             "https://1desiremovies.rodeo",
             "https://1desiremovies.wales",
             "https://1desiremovies.nexus",
             "https://1desiremovies.cymru"
+        ]
+    },
+    "4khdhub": {
+        "type": "redirect_or_probe",
+        "fallback": "https://4khdhub.one",
+        "candidates": [
+            "https://4khdhub.one",
+            "https://4khdhub.cloud"
         ],
-        "fallback": "https://1desiremovies.rodeo"
+        "search_dork": "4khdhub official website"
+    },
+    "ddlbase": {
+        "type": "redirect_or_probe",
+        "fallback": "https://ddlbase.com",
+        "candidates": [
+            "https://ddlbase.com",
+            "https://ddlbase.net",
+            "https://ddlbase.org"
+        ]
+    },
+    "nyaa": {
+        "type": "redirect_or_probe",
+        "fallback": "https://nyaa.media",
+        "candidates": [
+            "https://nyaa.media",
+            "https://nyaa.si",
+            "https://nyaa.land",
+            "https://nyaa.iss.ink"
+        ]
+    },
+    "bingr": {
+        "type": "redirect_or_probe",
+        "fallback": "https://bingr.one",
+        "candidates": [
+            "https://bingr.one",
+            "https://bingr.app"
+        ]
     }
 }
 

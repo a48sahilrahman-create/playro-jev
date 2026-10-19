@@ -1578,6 +1578,10 @@
             if (/vegamovies/i.test(s)) return 'VegaMovies';
             if (/olamovies/i.test(s)) return 'OlaMovies';
             if (/youtube/i.test(s)) return 'YouTube';
+            if (/desiremovies/i.test(s)) return 'DesireMovies';
+            if (/ddlbase/i.test(s)) return 'DDLBase';
+            if (/nyaa/i.test(s)) return 'Nyaa';
+            if (/bingr/i.test(s)) return 'Bingr';
             return s;
         }
 
@@ -1671,6 +1675,10 @@
                 else if (pLower.includes('vega')) icon = '🌟';
                 else if (pLower.includes('hdhub')) icon = '🎬';
                 else if (pLower.includes('ola')) icon = '🔥';
+                else if (pLower.includes('desire')) icon = '🎬';
+                else if (pLower.includes('ddlbase')) icon = '📦';
+                else if (pLower.includes('nyaa')) icon = '🐱';
+                else if (pLower.includes('bingr')) icon = '🍿';
 
                 const safePlatName = stat.name.replace(/'/g, "\\'");
 

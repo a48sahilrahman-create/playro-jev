@@ -13,13 +13,16 @@ import time
 import asyncio
 import re
 import json
+import html
 import urllib.parse
 from typing import Optional, List, Dict, Any
 import httpx
 from bs4 import BeautifulSoup
 from parallel_dispatcher import is_strict_match
 from jev_stream_resolver import JevStreamResolver
+from link_resolver import LinkResolver
 from domain_resolver import (
+    DomainResolver,
     get_active_mirror,
     get_active_mirror_sync,
     report_mirror_failure,
@@ -46,18 +49,19 @@ DEFAULT_HEADERS = {
 class FastScrapers:
     def __init__(self):
         self.limits = httpx.Limits(max_keepalive_connections=30, max_connections=60)
+        self.domain_resolver = DomainResolver()
 
-    async def search_uhdmovies(self, client: httpx.AsyncClient, query: str) -> list:
+    async def search_uhdmovies(self, client: httpx.AsyncClient, query: str, season: Optional[int] = None, episode: Optional[int] = None) -> list:
         """Fast search & catalog parsing on UHDMovies (< 350ms)."""
         clean = re.sub(r'\s+', '+', query.strip())
-        uhd_mirror = await get_active_mirror("uhdmovies")
+        uhd_mirror = await self.domain_resolver.get_mirror("uhdmovies")
         url = f"{uhd_mirror}/?s={clean}"
         results = []
 
         try:
             resp = await client.get(url, headers=DEFAULT_HEADERS, follow_redirects=True, timeout=2.5)
             if resp.status_code == 200:
-                await report_mirror_success("uhdmovies")
+                await self.domain_resolver.report_success("uhdmovies")
                 soup = BeautifulSoup(resp.text, "lxml")
                 articles = soup.find_all("article") or soup.find_all("div", class_=re.compile(r'post-item|grid-item|entry'))
 
@@ -82,7 +86,7 @@ class FastScrapers:
                     try:
                         p_resp = await client.get(post_url, headers=DEFAULT_HEADERS, timeout=2.5)
                         if p_resp.status_code == 200:
-                            await report_mirror_success("uhdmovies")
+                            await self.domain_resolver.report_success("uhdmovies")
                             p_soup = BeautifulSoup(p_resp.text, "lxml")
                             d_links = p_soup.find_all("a", href=re.compile(r'driveseed|cloud\.unblocked|drive\.google|techy|hubcloud|naukriadda|\?sid='))
                             for dl in d_links:
@@ -164,17 +168,26 @@ class FastScrapers:
                                 is_batch_kw = any(k in label.lower() for k in ["batch", "zip", "pack", "full season", "all episodes", "complete"]) or bool(re.search(r'\b(batch|zip|pack|full\s*season|all\s*episodes|complete\s*(?:series|season|batch|pack)|s\d+\s*-\s*s\d+|season\s*\d+\s*zip)\b', label, re.I))
 
                                 s_num_m = re.search(r'\d+', season_tag)
-                                s_num = int(s_num_m.group(0)) if s_num_m else 1
+                                s_num = int(s_num_m.group(0)) if s_num_m else (season if season is not None else 1)
+
+                                if season is not None and s_num != season:
+                                    continue
 
                                 if ep_m and not (is_range or is_batch_kw):
                                     e_val = int(ep_m.group(2) or ep_m.group(3) or ep_m.group(4))
+                                    if episode is not None and e_val != episode:
+                                        continue
                                     ep_tag = f"S{s_num:02d}E{e_val:02d}"
                                     is_batch = False
                                 elif is_batch_kw or is_range:
+                                    if episode is not None:
+                                        continue
                                     ep_tag = f"S{s_num:02d} Batch"
                                     is_batch = True
                                 else:
                                     is_batch = bool(any(k in context_text.lower() for k in ["batch", "zip", "pack", "full season", "all episodes"]))
+                                    if episode is not None and is_batch:
+                                        continue
                                     ep_tag = f"S{s_num:02d} Batch" if is_batch and season_tag else (season_tag or "")
 
                                 post_results.append({
@@ -192,16 +205,16 @@ class FastScrapers:
                                 })
 
                             # Layer 2 JEV Fallback: If standard DOM parsing found 0 links
-                            if not post_results and p_resp.text:
+                            if not post_results and p_resp.text and episode is None:
                                 post_results = await JevStreamResolver.extract_media_streams(
                                     p_resp.text,
                                     query=post_title or query,
                                     platform="UHDMovies"
                                 )
                         else:
-                            await report_mirror_failure("uhdmovies", post_url)
+                            await self.domain_resolver.report_failure("uhdmovies", post_url)
                     except Exception:
-                        await report_mirror_failure("uhdmovies", post_url)
+                        await self.domain_resolver.report_failure("uhdmovies", post_url)
                     return post_results
 
                 post_tasks = [fetch_post(art) for art in articles[:2]]
@@ -211,16 +224,16 @@ class FastScrapers:
                         results.extend(pl)
 
                 # Outer Layer 2 Fallback: If 0 results discovered across articles
-                if not results and resp.text:
+                if not results and resp.text and episode is None:
                     results = await JevStreamResolver.extract_media_streams(
                         resp.text,
                         query=query,
                         platform="UHDMovies"
                     )
             else:
-                await report_mirror_failure("uhdmovies", url)
+                await self.domain_resolver.report_failure("uhdmovies", url)
         except Exception:
-            await report_mirror_failure("uhdmovies", url)
+            await self.domain_resolver.report_failure("uhdmovies", url)
 
         return results
 
@@ -1282,19 +1295,492 @@ class FastScrapers:
 
         return results
 
-    async def search_all_concurrent(self, query: str, priority_platform: str = "UHDMovies", season: Optional[int] = None, episode: Optional[int] = None) -> list:
-        """Search across platforms concurrently in parallel (< 800ms)."""
-        async with httpx.AsyncClient(http2=True, limits=self.limits, follow_redirects=True) as client:
-            t_uhd = self.search_uhdmovies(client, query)
-            t_vega = self.search_vegamovies(client, query, season=season, episode=episode)
-            t_hdh = self.search_hdhub4u(client, query, season=season, episode=episode)
-            t_ola = self.search_olamovies(client, query, season=season, episode=episode)
-            t_4khd = self.search_4khdhub(client, query, season=season, episode=episode)
+    async def search_desiremovies(self, client: httpx.AsyncClient, query: str, season: Optional[int] = None, episode: Optional[int] = None) -> list:
+        """Fast search & catalog parsing on DesireMovies via WP REST API (< 400ms)."""
+        clean = query.strip()
+        encoded_query = urllib.parse.quote(clean)
+        mirror = await self.domain_resolver.get_mirror("desiremovies")
+        url = f"{mirror}/wp-json/wp/v2/posts?search={encoded_query}&_fields=id,title,link,content"
+        results = []
 
-            res_uhd, res_vega, res_hdh, res_ola, res_4khd = await asyncio.gather(t_uhd, t_vega, t_hdh, t_ola, t_4khd, return_exceptions=True)
+        try:
+            resp = await client.get(url, headers=DEFAULT_HEADERS, timeout=3.5, follow_redirects=True)
+            if resp.status_code == 200:
+                await self.domain_resolver.report_success("desiremovies")
+                posts = resp.json()
+                if not isinstance(posts, list):
+                    posts = []
+
+                for p in posts:
+                    raw_title = p.get("title", {})
+                    post_title = html.unescape(raw_title.get("rendered", "") if isinstance(raw_title, dict) else str(raw_title))
+                    post_title = re.sub(r'<[^>]+>', '', post_title).strip()
+                    if not post_title or not is_strict_match(query, post_title):
+                        continue
+
+                    content_raw = p.get("content", {})
+                    content_html = content_raw.get("rendered", "") if isinstance(content_raw, dict) else str(content_raw)
+                    if not content_html:
+                        continue
+
+                    soup = BeautifulSoup(content_html, "lxml")
+                    # Extract Gyanigurus / HubCloud / GDFlix / PixelDrain / Drive links
+                    target_links = soup.find_all("a", href=re.compile(r'gyanigurus|hubcloud|gdflix|pixeldrain|hubdrive|drive|fast-dl|vcloud', re.I))
+                    seen_links = set()
+
+                    for a in target_links:
+                        href = a.get("href", "")
+                        if not href or href in seen_links or href.startswith("#"):
+                            continue
+                        seen_links.add(href)
+
+                        label = a.get_text(strip=True) or (a.find_parent().get_text(strip=True) if a.find_parent() else "")
+                        # Look back for nearest headings/paragraphs for resolution, season, episode, size
+                        prev_elements = a.find_all_previous(["h1", "h2", "h3", "h4", "h5", "p", "strong", "div"])[:8]
+                        ctx_parts = [label]
+                        for el in prev_elements:
+                            t = el.get_text(" ", strip=True)
+                            if 0 < len(t) < 300:
+                                ctx_parts.append(t)
+                        full_ctx = " ".join(ctx_parts)
+
+                        # Detect season
+                        s_num = None
+                        sm = re.search(r'\b(?:Season|S)\s*0*(\d{1,2})\b', full_ctx, re.I)
+                        if sm:
+                            s_num = int(sm.group(1))
+                        elif season is not None:
+                            s_num = season
+                        else:
+                            s_num = 1
+
+                        if season is not None and s_num != season:
+                            continue
+
+                        # Detect episode
+                        ep_m = re.search(r'\b(?:Episode|Ep|E)[-\s]*0*(\d{1,3})\b', label, re.I)
+                        if not ep_m:
+                            ep_m = re.search(r'\b(?:Episode|Ep|E)[-\s]*0*(\d{1,3})\b', full_ctx, re.I)
+
+                        is_range = bool(re.search(r'(?:episodes?|ep|e)\s*\d+\s*-\s*\d+', label, re.I) or re.search(r'(?:episodes?|ep|e)\s*\d+\s*-\s*\d+', full_ctx, re.I))
+                        is_batch_kw = any(k in label.lower() or k in full_ctx.lower() for k in ["batch", "zip", "pack", "full season", "all episodes", "complete"])
+
+                        if episode is not None:
+                            if is_batch_kw or is_range or not ep_m:
+                                continue
+                            e_val = int(ep_m.group(1))
+                            if e_val != episode:
+                                continue
+                            ep_tag = f"S{s_num:02d}E{e_val:02d}"
+                            is_batch = False
+                        else:
+                            if ep_m and not (is_batch_kw or is_range):
+                                e_val = int(ep_m.group(1))
+                                ep_tag = f"S{s_num:02d}E{e_val:02d}"
+                                is_batch = False
+                            elif is_batch_kw or is_range:
+                                ep_tag = f"S{s_num:02d} Batch"
+                                is_batch = True
+                            else:
+                                is_batch = False
+                                ep_tag = f"S{s_num:02d}" if "season" in post_title.lower() else ""
+
+                        # Resolution
+                        res_m = re.search(r'(2160p|4K|1080p|720p|480p)', f"{label} {full_ctx} {post_title}", re.I)
+                        detected_res = res_m.group(1).upper() if res_m else "1080P"
+                        if detected_res == "4K":
+                            detected_res = "2160P"
+
+                        # Size
+                        size_m = re.search(r'\[?(\d+(?:\.\d+)?\s*(?:GB|MB)(?:\s*/\s*E)?)\]?', f"{label} {full_ctx}", re.I)
+                        detected_size = size_m.group(1).upper().strip("[] ") if size_m else "Unknown"
+
+                        results.append({
+                            "platform": "DesireMovies",
+                            "title": f"{post_title} S{s_num:02d}".strip() if s_num and "season" in full_ctx.lower() else post_title,
+                            "label": f"DesireMovies | [{detected_res}] {ep_tag} {label[:40]} ({detected_size})".strip(),
+                            "episode_tag": ep_tag,
+                            "resolution": detected_res,
+                            "codec": "HEVC" if any(k in full_ctx.upper() for k in ["HEVC", "10BIT", "X265"]) else "x264",
+                            "size": detected_size,
+                            "audio": "Dual Audio" if any(k in full_ctx.lower() for k in ["dual", "hindi"]) else "Original",
+                            "target_url": href,
+                            "is_batch": is_batch,
+                            "source_id": "desire_wp"
+                        })
+            else:
+                await self.domain_resolver.report_failure("desiremovies", url)
+        except Exception:
+            await self.domain_resolver.report_failure("desiremovies", url)
+
+        return results
+
+    async def search_ddlbase(self, client: httpx.AsyncClient, query: str, season: Optional[int] = None, episode: Optional[int] = None) -> list:
+        """Fast search & scene release extraction on DDLBase with XOR button decryption (< 450ms)."""
+        clean = query.strip()
+        encoded_query = urllib.parse.quote(clean)
+        mirror = await self.domain_resolver.get_mirror("ddlbase")
+        url = f"{mirror}/?s={encoded_query}"
+        results = []
+
+        try:
+            resp = await client.get(url, headers=DEFAULT_HEADERS, timeout=3.5, follow_redirects=True)
+            if resp.status_code == 200:
+                await self.domain_resolver.report_success("ddlbase")
+                soup = BeautifulSoup(resp.text, "lxml")
+
+                # Parse candidate scene release links: <a href="/post/...">Release Title</a>
+                candidate_links = []
+                for a in soup.find_all("a", href=True):
+                    href = a["href"]
+                    if not href.startswith("/post/"):
+                        continue
+                    release_title = a.get_text(strip=True)
+                    if not release_title or len(release_title) < 5:
+                        continue
+                    clean_for_match = re.sub(r'[\._]', ' ', release_title)
+                    clean_for_match = re.sub(r'\s*-[A-Za-z0-9_]+$', '', clean_for_match)
+                    clean_for_match = re.sub(r'\b(2160p|4k|1080p|720p|480p|bluray|web-dl|webrip|uhd|hevc|x265|x264|h264|h265|dts|ddp5\.1|atmos|dual|audio|aac|remux)\b.*', '', clean_for_match, flags=re.I).strip()
+                    if not is_strict_match(query, clean_for_match or release_title.replace(".", " ")):
+                        continue
+                    if href not in [c[0] for c in candidate_links]:
+                        candidate_links.append((href, release_title))
+
+                async def fetch_ddlbase_post(post_path, release_title):
+                    post_url = f"{mirror}{post_path}" if post_path.startswith("/") else post_path
+                    post_results = []
+                    try:
+                        p_resp = await client.get(post_url, headers=DEFAULT_HEADERS, timeout=3.5, follow_redirects=True)
+                        if p_resp.status_code == 200:
+                            await self.domain_resolver.report_success("ddlbase")
+                            p_soup = BeautifulSoup(p_resp.text, "lxml")
+                            p_text = p_soup.get_text(" ", strip=True)
+
+                            # Parse scene release metadata: e.g. Title.S01E01.2160p...
+                            s_num = None
+                            e_num = None
+                            se_m = re.search(r'\bS(\d{1,2})\s*[-._ ]?E(\d{1,3})\b', release_title, re.I)
+                            if se_m:
+                                s_num = int(se_m.group(1))
+                                e_num = int(se_m.group(2))
+                            else:
+                                s_m = re.search(r'\b(?:Season|S)\s*0*(\d{1,2})\b', release_title, re.I)
+                                if s_m:
+                                    s_num = int(s_m.group(1))
+                                elif season is not None:
+                                    s_num = season
+
+                            is_range = bool(re.search(r'(?:episodes?|ep|e)\s*\d+\s*-\s*\d+', release_title, re.I))
+                            is_batch_kw = any(k in release_title.lower() for k in ["batch", "zip", "pack", "full season", "all episodes", "complete"])
+
+                            if season is not None and s_num is not None and s_num != season:
+                                return []
+
+                            if episode is not None:
+                                if is_batch_kw or is_range or e_num is None or e_num != episode:
+                                    return []
+                                ep_tag = f"S{s_num:02d}E{e_num:02d}" if s_num else f"E{e_num:02d}"
+                                is_batch = False
+                            else:
+                                if e_num is not None and not (is_batch_kw or is_range):
+                                    ep_tag = f"S{s_num:02d}E{e_num:02d}" if s_num else f"E{e_num:02d}"
+                                    is_batch = False
+                                elif is_batch_kw or is_range:
+                                    ep_tag = f"S{s_num:02d} Batch" if s_num else "Batch"
+                                    is_batch = True
+                                else:
+                                    ep_tag = f"S{s_num:02d}" if s_num else ""
+                                    is_batch = False
+
+                            # Resolution
+                            res_m = re.search(r'(2160p|4K|1080p|720p|480p)', f"{release_title} {p_text}", re.I)
+                            detected_res = res_m.group(1).upper() if res_m else "1080P"
+                            if detected_res == "4K":
+                                detected_res = "2160P"
+
+                            # Codec
+                            codec = "HEVC" if any(k in release_title.upper() for k in ["H.265", "H-265", "X265", "HEVC"]) else "x264"
+
+                            # Size
+                            size_m = re.search(r'\[(\d+(?:\.\d+)?\s*(?:GB|GiB|MB|MiB))\]', p_text, re.I)
+                            if not size_m:
+                                size_m = re.search(r'FileSize\.*:\s*(\d+(?:\.\d+)?\s*(?:GiB|GB|MiB|MB))', p_text, re.I)
+                            detected_size = size_m.group(1).upper() if size_m else "Unknown"
+
+                            seen_targets = set()
+
+                            # 1. Decode XOR buttons (elements with ddllk / data-cipher / data-key)
+                            for btn in p_soup.find_all(attrs={"ddllk": True}):
+                                cipher = btn.get("ddllk")
+                                if not cipher:
+                                    continue
+                                decoded_url = LinkResolver.resolve_ddlbase_xor(cipher)
+                                if decoded_url and decoded_url.startswith("http") and decoded_url not in seen_targets:
+                                    seen_targets.add(decoded_url)
+                                    btn_lbl = btn.get_text(strip=True) or "Direct Download"
+                                    post_results.append({
+                                        "platform": "DDLBase",
+                                        "title": release_title.replace(".", " "),
+                                        "label": f"DDLBase | [{detected_res}] {ep_tag} {btn_lbl} ({detected_size})".strip(),
+                                        "episode_tag": ep_tag,
+                                        "resolution": detected_res,
+                                        "codec": codec,
+                                        "size": detected_size,
+                                        "audio": "Dual Audio" if any(k in release_title.lower() for k in ["dual", "atmos", "truehd"]) else "Original",
+                                        "target_url": decoded_url,
+                                        "is_batch": is_batch,
+                                        "source_id": "ddlbase_xor"
+                                    })
+
+                            # 2. Extract standard download links (PixelDrain, 1Fichier, Rapidgator, etc.)
+                            for dl_a in p_soup.find_all("a", href=re.compile(r'pixeldrain|1fichier|rapidgator|clicknupload|gofile|mega\.nz|nitroflare', re.I)):
+                                dl_url = dl_a["href"]
+                                if dl_url in seen_targets:
+                                    continue
+                                seen_targets.add(dl_url)
+                                dl_lbl = dl_a.get_text(strip=True) or dl_url.split("/")[2]
+                                post_results.append({
+                                    "platform": "DDLBase",
+                                    "title": release_title.replace(".", " "),
+                                    "label": f"DDLBase | [{detected_res}] {ep_tag} {dl_lbl} ({detected_size})".strip(),
+                                    "episode_tag": ep_tag,
+                                    "resolution": detected_res,
+                                    "codec": codec,
+                                    "size": detected_size,
+                                    "audio": "Dual Audio" if any(k in release_title.lower() for k in ["dual", "atmos", "truehd"]) else "Original",
+                                    "target_url": dl_url,
+                                    "is_batch": is_batch,
+                                    "source_id": "ddlbase_link"
+                                })
+                        else:
+                            await self.domain_resolver.report_failure("ddlbase", post_url)
+                    except Exception:
+                        await self.domain_resolver.report_failure("ddlbase", post_url)
+                    return post_results
+
+                fetch_tasks = [fetch_ddlbase_post(path, title) for path, title in candidate_links[:3]]
+                fetch_lists = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+                for fl in fetch_lists:
+                    if isinstance(fl, list):
+                        results.extend(fl)
+            else:
+                await self.domain_resolver.report_failure("ddlbase", url)
+        except Exception:
+            await self.domain_resolver.report_failure("ddlbase", url)
+
+        return results
+
+    async def search_nyaa(self, client: httpx.AsyncClient, query: str, season: Optional[int] = None, episode: Optional[int] = None) -> list:
+        """Fast search & catalog parsing on Nyaa (< 350ms)."""
+        clean = query.strip()
+        encoded_query = urllib.parse.quote(clean)
+        mirror = await self.domain_resolver.get_mirror("nyaa")
+        url = f"{mirror}/?f=0&c=0_0&q={encoded_query}"
+        results = []
+
+        try:
+            resp = await client.get(url, headers=DEFAULT_HEADERS, timeout=3.5, follow_redirects=True)
+            if resp.status_code == 200:
+                await self.domain_resolver.report_success("nyaa")
+                soup = BeautifulSoup(resp.text, "lxml")
+                table = soup.find("table", class_=re.compile(r'torrent-list|table'))
+                rows = table.find_all("tr") if table else []
+
+                for tr in rows[1:]:
+                    tds = tr.find_all("td")
+                    if len(tds) < 6:
+                        continue
+
+                    # Title
+                    title_links = tds[1].find_all("a")
+                    if not title_links:
+                        continue
+                    title_a = title_links[-1]
+                    item_title = title_a.get_text(strip=True)
+                    if not item_title:
+                        continue
+                    clean_nyaa = re.sub(r'^\[[^\]]+\]\s*', '', item_title)
+                    clean_nyaa = re.sub(r'\s*\[[0-9A-Fa-f]{8}\].*', '', clean_nyaa)
+                    clean_nyaa = re.sub(r'\s*\.(mkv|mp4|avi)$', '', clean_nyaa, flags=re.I)
+                    clean_nyaa = re.sub(r'\s*-\s*\d+.*', '', clean_nyaa)
+                    clean_nyaa = re.sub(r'\s*\(\d+-\d+\).*', '', clean_nyaa)
+                    clean_nyaa = re.sub(r'\s*\(\d+p\).*', '', clean_nyaa, flags=re.I)
+                    if not is_strict_match(query, clean_nyaa.strip() or item_title):
+                        continue
+
+                    # Magnet link
+                    magnet_a = tds[2].find("a", href=re.compile(r'^magnet:', re.I))
+                    if not magnet_a:
+                        torrent_a = tds[2].find("a", href=re.compile(r'\.torrent$', re.I))
+                        target_url = f"{mirror}{torrent_a['href']}" if torrent_a and torrent_a['href'].startswith("/") else (torrent_a['href'] if torrent_a else "")
+                    else:
+                        target_url = magnet_a["href"]
+
+                    if not target_url:
+                        continue
+
+                    size_val = tds[3].get_text(strip=True)
+                    seeders_val = tds[5].get_text(strip=True)
+
+                    # Anime episode and season detection
+                    s_num = None
+                    e_num = None
+
+                    se_m = re.search(r'\bS(\d{1,2})\s*[-._ ]?E(\d{1,3})\b', item_title, re.I)
+                    if se_m:
+                        s_num = int(se_m.group(1))
+                        e_num = int(se_m.group(2))
+                    else:
+                        s_m = re.search(r'\b(?:Season|S)\s*0*(\d{1,2})\b', item_title, re.I)
+                        if s_m:
+                            s_num = int(s_m.group(1))
+                        elif season is not None:
+                            s_num = season
+                        else:
+                            s_num = 1
+
+                        # Anime discrete episode patterns: " - 01", "Episode 01", "E01", " 01 "
+                        ep_m = re.search(r'(?:[-_ ]\s*0*(\d{1,3})\s*(?:v\d+)?\s*(?:\[|\(|\.|$))|\b(?:Episode|Ep|E)[-\s]*0*(\d{1,3})\b', item_title, re.I)
+                        if ep_m:
+                            e_num = int(ep_m.group(1) or ep_m.group(2))
+
+                    is_range = bool(re.search(r'(?:episodes?|ep|e)?\s*\d+\s*[-~]\s*\d+', item_title, re.I))
+                    is_batch_kw = any(k in item_title.lower() for k in ["batch", "complete", "series", "season", "01~", "01-", "vol."])
+
+                    if season is not None and s_num != season:
+                        continue
+
+                    if episode is not None:
+                        if is_batch_kw or is_range or e_num is None or e_num != episode:
+                            continue
+                        ep_tag = f"S{s_num:02d}E{e_num:02d}"
+                        is_batch = False
+                    else:
+                        if e_num is not None and not (is_batch_kw or is_range):
+                            ep_tag = f"S{s_num:02d}E{e_num:02d}"
+                            is_batch = False
+                        elif is_batch_kw or is_range:
+                            ep_tag = f"S{s_num:02d} Batch"
+                            is_batch = True
+                        else:
+                            ep_tag = f"S{s_num:02d}" if "season" in item_title.lower() else ""
+                            is_batch = False
+
+                    # Resolution
+                    res_m = re.search(r'(2160p|4K|1080p|720p|480p)', item_title, re.I)
+                    detected_res = res_m.group(1).upper() if res_m else "1080P"
+                    if detected_res == "4K":
+                        detected_res = "2160P"
+
+                    # Codec
+                    codec = "HEVC" if any(k in item_title.upper() for k in ["HEVC", "X265", "10BIT"]) else ("AV1" if "AV1" in item_title.upper() else "x264")
+
+                    results.append({
+                        "platform": "Nyaa",
+                        "title": item_title,
+                        "label": f"Nyaa | [{detected_res}] {ep_tag} ({size_val}, {seeders_val} seeders)".strip(),
+                        "episode_tag": ep_tag,
+                        "resolution": detected_res,
+                        "codec": codec,
+                        "size": size_val,
+                        "audio": "Japanese / Multi" if "multi" in item_title.lower() or "dual" in item_title.lower() else "Original",
+                        "target_url": target_url,
+                        "is_batch": is_batch,
+                        "source_id": "nyaa_torrent"
+                    })
+            else:
+                await self.domain_resolver.report_failure("nyaa", url)
+        except Exception:
+            await self.domain_resolver.report_failure("nyaa", url)
+
+        return results
+
+    async def search_bingr(self, client: httpx.AsyncClient, query: str, season: Optional[int] = None, episode: Optional[int] = None) -> list:
+        """Fast search & embed streaming endpoint generation on Bingr (< 300ms)."""
+        clean = query.strip()
+        mirror = await self.domain_resolver.get_mirror("bingr")
+        api_url = "https://api.bingr.one/api/search"
+        params = {"q": clean, "type": "multi", "page": 1}
+        results = []
+
+        try:
+            resp = await client.get(api_url, params=params, headers=DEFAULT_HEADERS, timeout=3.5, follow_redirects=True)
+            if resp.status_code == 200:
+                await self.domain_resolver.report_success("bingr")
+                data = resp.json()
+                items = data.get("results", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+
+                for item in items[:4]:
+                    item_title = item.get("title") or item.get("name") or ""
+                    if not item_title or not is_strict_match(query, item_title):
+                        continue
+
+                    tmdb_id = item.get("id")
+                    if not tmdb_id:
+                        continue
+
+                    media_type = item.get("type") or ("tv" if season is not None or episode is not None else "movie")
+                    year = item.get("year", "")
+
+                    if media_type == "tv":
+                        s = season if season is not None else 1
+                        e = episode if episode is not None else 1
+                        ep_tag = f"S{s:02d}E{e:02d}"
+
+                        embeds = [
+                            ("FilmU Embed (HLS)", f"https://embed.filmu.in/tv/{tmdb_id}/{s}/{e}"),
+                            ("Cinezo Player", f"https://player.cinezo.live/embed/tv/{tmdb_id}/{s}/{e}"),
+                            ("Vidbolt Stream", f"https://vidbolt.xyz/tv/{tmdb_id}/{s}/{e}")
+                        ]
+                    else:
+                        ep_tag = ""
+                        embeds = [
+                            ("FilmU Embed (HLS)", f"https://embed.filmu.in/movie/{tmdb_id}"),
+                            ("Cinezo Player", f"https://player.cinezo.live/embed/movie/{tmdb_id}"),
+                            ("Vidbolt Stream", f"https://vidbolt.xyz/movie/{tmdb_id}")
+                        ]
+
+                    for source_name, embed_url in embeds:
+                        results.append({
+                            "platform": "Bingr",
+                            "title": f"{item_title} ({year})".strip() if year else item_title,
+                            "label": f"Bingr | [1080P] {ep_tag} {source_name}".strip(),
+                            "episode_tag": ep_tag,
+                            "resolution": "1080P",
+                            "codec": "H.264",
+                            "size": "Stream",
+                            "audio": "Multi Audio",
+                            "target_url": embed_url,
+                            "is_batch": False,
+                            "source_id": "bingr_embed"
+                        })
+            else:
+                await self.domain_resolver.report_failure("bingr", api_url)
+        except Exception:
+            await self.domain_resolver.report_failure("bingr", api_url)
+
+        return results
+
+    async def search_all_concurrent(self, query: str, priority_platform: str = "UHDMovies", season: Optional[int] = None, episode: Optional[int] = None) -> list:
+        """Search across all 9 platforms concurrently in parallel (< 800ms)."""
+        async with httpx.AsyncClient(http2=True, limits=self.limits, follow_redirects=True) as client:
+            t_uhd = self.search_uhdmovies(client, query, season=season, episode=episode)
+            t_4khd = self.search_4khdhub(client, query, season=season, episode=episode)
+            t_hdh = self.search_hdhub4u(client, query, season=season, episode=episode)
+            t_vega = self.search_vegamovies(client, query, season=season, episode=episode)
+            t_ola = self.search_olamovies(client, query, season=season, episode=episode)
+            t_desire = self.search_desiremovies(client, query, season=season, episode=episode)
+            t_ddl = self.search_ddlbase(client, query, season=season, episode=episode)
+            t_nyaa = self.search_nyaa(client, query, season=season, episode=episode)
+            t_bingr = self.search_bingr(client, query, season=season, episode=episode)
+
+            task_results = await asyncio.gather(
+                t_uhd, t_4khd, t_hdh, t_vega, t_ola, t_desire, t_ddl, t_nyaa, t_bingr,
+                return_exceptions=True
+            )
 
             all_results = []
-            for r in [res_uhd, res_vega, res_hdh, res_ola, res_4khd]:
+            for r in task_results:
                 if isinstance(r, list):
                     all_results.extend(r)
 

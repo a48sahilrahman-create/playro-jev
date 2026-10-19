@@ -50,8 +50,8 @@
   },
   "nyaa": {
     "active_mirror": "https://nyaa.media",
-    "latency_ms": 0.0,
-    "last_success": 1792390726.6029506,
+    "latency_ms": 15.0,
+    "last_success": 1792390746.693165,
     "consecutive_failures": 0,
     "status": "healthy"
   },

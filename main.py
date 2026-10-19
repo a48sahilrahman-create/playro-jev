@@ -20,6 +20,7 @@ import json
 import base64
 import urllib.parse
 import difflib
+import math
 from typing import Optional, List, Dict, Any
 from contextlib import asynccontextmanager
 
@@ -43,6 +44,9 @@ from auth_bridge import InteractiveAuthBridge
 from addon_manager import AddonManager
 from audio_probe import probe_audio_streams, find_ffmpeg
 from audio_transcoder import stream_transcoded_media
+from hls_transmuxer import HLS_SESSION_MANAGER
+from cascade_resolver import resolve_stream_cascade, cascade_search_and_resolve
+from embed_engine import EmbedEngine
 
 play_engine = PlayEngine()
 db = MediaDB()
@@ -1758,6 +1762,169 @@ async def api_tmdb_search(q: str):
         print(f"[TMDB search error] {e}")
 
     return JSONResponse({"title": q, "poster": "", "backdrop": "", "year": "", "rating": "", "overview": "", "type": "unknown"})
+
+
+# -------------------------------------------------------------
+# 4. HLS Transmuxer, Cascade Resolver & Embed Fallback Endpoints
+# -------------------------------------------------------------
+@app.get("/api/hls/master.m3u8")
+async def api_hls_master(
+    request: Request,
+    url: str,
+    track: int = 0,
+    boost: float = 1.0
+):
+    """
+    Dynamic VOD HLS Master Manifest Generator:
+    Probes audio/video stream and creates or retrieves active HLS session.
+    """
+    raw_url = (url or "").strip()
+    if not raw_url:
+        raise HTTPException(status_code=400, detail="Missing media target URL")
+
+    base_url = str(request.base_url).rstrip("/")
+    session = await HLS_SESSION_MANAGER.get_or_create_session(raw_url, audio_track=track, volume_boost=boost)
+    return Response(
+        content=session.generate_master_manifest(base_url),
+        media_type="application/vnd.apple.mpegurl"
+    )
+
+
+@app.get("/api/hls/{session_id}/index.m3u8")
+async def api_hls_media_playlist(request: Request, session_id: str):
+    """
+    RFC 8216 compliant VOD HLS media playlist generator for active session.
+    """
+    session = HLS_SESSION_MANAGER.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="HLS session not found")
+
+    base_url = f"{str(request.base_url).rstrip('/')}/api/hls/{session_id}"
+    return Response(
+        content=session.generate_media_manifest(base_url),
+        media_type="application/vnd.apple.mpegurl"
+    )
+
+
+@app.get("/api/hls/{session_id}/segment_{segment_idx}.ts")
+async def api_hls_segment(session_id: str, segment_idx: int):
+    """
+    Dynamic MPEG-TS slice provider:
+    Retrieves from LRU cache or slices on-the-fly via FFmpeg.
+    """
+    session = HLS_SESSION_MANAGER.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="HLS session not found")
+
+    data = await session.get_or_generate_segment(segment_idx)
+    return Response(
+        content=data,
+        media_type="video/mp2t",
+        headers={
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "public, max-age=3600"
+        }
+    )
+
+
+@app.get("/api/hls/{session_id}/status")
+async def api_hls_status(session_id: str):
+    """
+    Returns active HLS session telemetry, health, duration, audio track, and segment count.
+    """
+    session = HLS_SESSION_MANAGER.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="HLS session not found")
+
+    total_segments = max(1, math.ceil(session.duration / session.segment_duration))
+    return JSONResponse({
+        "session_id": session.session_id,
+        "health": "healthy",
+        "status": "healthy",
+        "duration": session.duration,
+        "audio_track": session.audio_track,
+        "volume_boost": session.volume_boost,
+        "segment_count": total_segments,
+        "segment_duration": session.segment_duration,
+        "is_audio_aac": session.is_audio_aac,
+        "created_at": session.created_at,
+        "last_accessed": session.last_accessed
+    })
+
+
+@app.get("/api/playback/cascade")
+async def api_playback_cascade(
+    q: str = "",
+    type: str = "movie",
+    season: Optional[int] = None,
+    episode: Optional[int] = None,
+    imdb_id: Optional[str] = None
+):
+    """
+    Cascading stream resolver with parallel TTFB benchmarking and waterfall fallback.
+    """
+    clean_q = (q or "").strip()
+    if not clean_q and imdb_id:
+        clean_q = imdb_id.strip()
+
+    if not clean_q:
+        return JSONResponse({
+            "status": "NO_STREAMS",
+            "primary": None,
+            "waterfall": [],
+            "candidates_tested": 0
+        })
+
+    try:
+        if imdb_id:
+            search_res = await play_engine.search(clean_q, imdb_id=imdb_id, season=season, episode=episode)
+            candidates = search_res.get("releases", []) if isinstance(search_res, dict) else (search_res if isinstance(search_res, list) else [])
+            res = await resolve_stream_cascade(candidates)
+        else:
+            res = await cascade_search_and_resolve(
+                query=clean_q,
+                media_type=type,
+                season=season,
+                episode=episode,
+                engine=play_engine
+            )
+        return JSONResponse(res)
+    except Exception as e:
+        print(f"[Cascade API Error] {e}")
+        return JSONResponse({
+            "status": "ERROR",
+            "error": str(e),
+            "primary": None,
+            "waterfall": [],
+            "candidates_tested": 0
+        }, status_code=500)
+
+
+@app.get("/api/embed/sources")
+async def api_embed_sources(
+    type: str,
+    id: str,
+    season: Optional[int] = None,
+    episode: Optional[int] = None,
+    preferred: Optional[str] = "filmu",
+    start_time: Optional[float] = None
+):
+    """
+    Multi-provider embed streaming source generator (Filmu, Cinezo, Vidbolt, Vidy, Vidrift).
+    """
+    clean_id = (id or "").strip()
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="Missing media ID")
+
+    res = EmbedEngine.get_preferred_embed(
+        media_type=type,
+        item_id=clean_id,
+        season=season,
+        episode=episode,
+        preferred=preferred or "filmu",
+        start_time=start_time
+    )
+    return JSONResponse(res)
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "7860"))

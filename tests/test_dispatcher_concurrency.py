@@ -29,6 +29,11 @@ async def test_stream_all_parallel_concurrency_and_timeout():
          patch("fast_scrapers.FastScrapers.search_uhdmovies", side_effect=mock_fetch_slow), \
          patch("fast_scrapers.FastScrapers.search_hdhub4u", side_effect=mock_fetch_fast), \
          patch("fast_scrapers.FastScrapers.search_olamovies", side_effect=mock_fetch_fast), \
+         patch("fast_scrapers.FastScrapers.search_4khdhub", side_effect=mock_fetch_fast), \
+         patch("fast_scrapers.FastScrapers.search_desiremovies", side_effect=mock_fetch_fast), \
+         patch("fast_scrapers.FastScrapers.search_ddlbase", side_effect=mock_fetch_fast), \
+         patch("fast_scrapers.FastScrapers.search_nyaa", side_effect=mock_fetch_fast), \
+         patch("fast_scrapers.FastScrapers.search_bingr", side_effect=mock_fetch_fast), \
          patch.object(dispatcher, "fetch_local_db", new_callable=AsyncMock, return_value=[]), \
          patch.object(dispatcher, "fetch_telegram", side_effect=mock_fetch_tg), \
          patch.object(dispatcher, "fetch_youtube", side_effect=mock_fetch_fast):

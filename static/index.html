@@ -12,6 +12,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/4.3.5/shaka-player.compiled.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.8/dist/hls.min.js"></script>
     <style>
         body {
             font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -268,33 +269,78 @@
     <!-- Embedded High-Performance Video Player Overlay -->
     <div id="playerOverlay" class="hidden fixed inset-0 z-50 bg-black flex flex-col justify-center items-center">
         <!-- Player Header / Controls Bar -->
-        <div id="playerHeaderBar" class="absolute top-0 left-0 right-0 p-6 flex items-center justify-between z-20 bg-gradient-to-b from-black/80 to-transparent transition-opacity duration-300">
-            <div class="flex items-center gap-4">
-                <button onclick="closeVideoPlayer()" class="focusable p-2 rounded-full bg-zinc-900/80 hover:bg-zinc-800 text-white border border-white/10" tabindex="0">
+        <div id="playerHeaderBar" class="absolute top-0 left-0 right-0 p-4 sm:p-6 flex items-center justify-between z-20 bg-gradient-to-b from-black/90 via-black/70 to-transparent transition-opacity duration-300">
+            <div class="flex items-center gap-3 sm:gap-4 min-w-0">
+                <button onclick="closeVideoPlayer()" class="focusable p-2 rounded-full bg-zinc-900/80 hover:bg-zinc-800 text-white border border-white/10 shrink-0" tabindex="0">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
                 </button>
-                <div>
-                    <h3 id="playerMediaTitle" class="text-base sm:text-lg font-bold text-white tracking-tight">Now Playing</h3>
-                    <p id="playerStreamBadge" class="text-xs text-zinc-400 font-mono">4K UHD Direct Stream</p>
+                <div class="min-w-0">
+                    <h3 id="playerMediaTitle" class="text-sm sm:text-base md:text-lg font-bold text-white tracking-tight truncate">Now Playing</h3>
+                    <p id="playerStreamBadge" class="text-[11px] sm:text-xs text-zinc-400 font-mono truncate">4K UHD Direct Stream</p>
                 </div>
             </div>
 
-            <!-- Autoplay & Next Controls -->
-            <div class="flex items-center gap-3">
-                <button id="audioPanelBtn" onclick="toggleAudioPanel()" class="px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 border border-zinc-600 text-white font-semibold text-xs flex items-center gap-1.5 transition-all shadow-sm">🎧 Audio &amp; Codecs</button>
-                <div class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-zinc-900/80 border border-white/10 text-xs text-zinc-300">
-                    <label for="autoplayToggle" class="cursor-pointer">Autoplay Next Episode</label>
+            <!-- Controls Cluster: Engine Toggle, Embed Provider, Audio Selector, Autoplay & VLC -->
+            <div class="flex items-center gap-2 sm:gap-3 shrink-0 flex-wrap justify-end">
+                <!-- Engine Mode Toggle: [⚡ Direct HLS | 🎬 Embed Fallback | ▲ VLC] -->
+                <div class="flex items-center bg-zinc-900/90 rounded-xl p-1 border border-white/10 shadow-lg" id="engineModeToggleGroup">
+                    <button id="engineToggleDirect" onclick="switchPlayerMode('direct')" class="px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all bg-white text-zinc-950 shadow-sm" title="Direct HLS Transmuxer & Native Video">
+                        <span>⚡</span>
+                        <span class="hidden md:inline">Direct HLS</span>
+                    </button>
+                    <button id="engineToggleEmbed" onclick="switchPlayerMode('embed')" class="px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all text-zinc-400 hover:text-white hover:bg-white/5" title="Switch to Embed Fallback Player">
+                        <span>🎬</span>
+                        <span class="hidden md:inline">Embed Fallback</span>
+                    </button>
+                    <button id="engineToggleVlc" onclick="switchPlayerMode('vlc')" class="px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all text-orange-400 hover:text-orange-300 hover:bg-white/5" title="Launch Stream in External VLC Player">
+                        <span>▲</span>
+                        <span class="hidden md:inline">VLC</span>
+                    </button>
+                </div>
+
+                <!-- Embed Provider Dropdown / Switcher: [Filmu | Cinezo | Vidbolt | Vidy | Vidrift] -->
+                <div id="embedProviderContainer" class="hidden flex items-center gap-1.5 bg-zinc-900/90 rounded-xl px-2.5 py-1 border border-white/10 shadow-lg">
+                    <span class="text-[10px] uppercase font-mono text-indigo-400 font-bold hidden sm:inline">Provider:</span>
+                    <select id="embedProviderSelect" onchange="switchEmbedProvider(this.value)" class="bg-zinc-800 text-white text-xs font-semibold rounded-lg px-2 py-0.5 border border-white/10 focus:outline-none cursor-pointer">
+                        <option value="filmu">Filmu</option>
+                        <option value="cinezo">Cinezo</option>
+                        <option value="vidbolt">Vidbolt</option>
+                        <option value="vidy">Vidy</option>
+                        <option value="vidrift">Vidrift</option>
+                    </select>
+                </div>
+
+                <!-- Multi-Audio Track Selector hooked to /api/audio/probe -->
+                <div id="headerAudioSelectorContainer" class="flex items-center gap-1.5 bg-zinc-900/90 rounded-xl px-2.5 py-1 border border-white/10 shadow-lg">
+                    <span class="text-xs">🎧</span>
+                    <select id="headerAudioTrackSelect" onchange="selectAudioTrack(parseInt(this.value))" class="bg-zinc-800 text-white text-xs font-semibold rounded-lg px-2 py-0.5 border border-white/10 focus:outline-none cursor-pointer max-w-[120px] sm:max-w-[160px] truncate">
+                        <option value="0">Audio Track 1</option>
+                    </select>
+                </div>
+
+                <!-- Audio & Codec Studio Modal Button -->
+                <button id="audioPanelBtn" onclick="toggleAudioPanel()" class="px-2.5 py-1.5 rounded-xl bg-zinc-900/90 hover:bg-zinc-800 border border-white/10 text-white font-semibold text-xs flex items-center gap-1.5 transition-all shadow-sm" title="Advanced Audio Tuning & Equalizer">
+                    <span>⚙️</span>
+                    <span class="hidden lg:inline">Audio Studio</span>
+                </button>
+
+                <!-- Autoplay Toggle -->
+                <div class="hidden xl:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-zinc-900/90 border border-white/10 text-xs text-zinc-300">
+                    <label for="autoplayToggle" class="cursor-pointer">Autoplay Next</label>
                     <input type="checkbox" id="autoplayToggle" checked class="w-3.5 h-3.5 accent-white rounded cursor-pointer">
                 </div>
-                <button onclick="openExternalVLC(currentStreamUrl)" class="focusable px-3 py-1.5 rounded-lg bg-orange-600/90 hover:bg-orange-600 text-white font-medium text-xs flex items-center gap-1.5" tabindex="0">
+
+                <!-- Dedicated Manual VLC Button -->
+                <button onclick="openExternalVLC(currentDirectUrl || currentStreamUrl)" class="focusable px-3 py-1.5 rounded-xl bg-orange-600/90 hover:bg-orange-600 text-white font-medium text-xs flex items-center gap-1.5 shadow-sm" tabindex="0" title="Launch in Desktop VLC">
                     <span>▲</span>
-                    <span>Open in VLC</span>
+                    <span class="hidden sm:inline">VLC</span>
                 </button>
             </div>
         </div>
 
-        <!-- Video Element -->
+        <!-- Dual Viewport: Video Element & Embed Fallback Iframe -->
         <video id="videoElement" class="w-full h-full max-h-screen object-contain" controls autoplay playsinline></video>
+        <iframe id="embedIframe" class="hidden w-full h-full border-0" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"></iframe>
 
         <!-- Playback Controls Alongside Video -->
         <div id="playerControlsContainer" class="absolute bottom-0 left-0 right-0 p-4 sm:p-6 z-20 bg-gradient-to-t from-black/95 via-black/80 to-transparent flex flex-col gap-2.5 transition-opacity duration-300">
@@ -654,6 +700,10 @@
         }
         let selectedTgBot = localStorage.getItem('playro_tg_bot') || 'Angela2_moviebot';
         let shakaPlayerInstance = null;
+        let hlsPlayerInstance = null;
+        let currentPlayerMode = 'direct'; // 'direct', 'embed', 'vlc'
+        let currentEmbedProvider = 'filmu'; // 'filmu', 'cinezo', 'vidbolt', 'vidy', 'vidrift'
+        let lastEmbedProgressSave = 0;
         let currentSearchReleases = [];
         let currentPlayingReleaseIndex = -1;
         let currentSourceFilter = 'ALL';
@@ -706,6 +756,7 @@
             updateAutoVlcButtonUI();
             renderContinueWatching();
             initShakaPlayer();
+            initEmbedPostMessageListener();
             await loadTrendingCatalog();
             await checkAuthStatus();
             initSpeechRecognition();
@@ -1573,6 +1624,7 @@
             if (!p) return 'Cloud';
             const s = String(p).trim();
             if (/telegram/i.test(s)) return 'Telegram';
+            if (/4khdhub/i.test(s)) return '4KHDHub';
             if (/hdhub/i.test(s)) return 'HDHub4u';
             if (/uhdmovies/i.test(s)) return 'UHDMovies';
             if (/vegamovies/i.test(s)) return 'VegaMovies';
@@ -1671,9 +1723,10 @@
                 const pLower = stat.name.toLowerCase();
                 if (pLower.includes('telegram')) icon = '✈️';
                 else if (pLower.includes('youtube')) icon = '▶️';
+                else if (pLower.includes('4khdhub')) icon = '⚡';
                 else if (pLower.includes('uhd') || pLower.includes('4k')) icon = '💎';
                 else if (pLower.includes('vega')) icon = '🌟';
-                else if (pLower.includes('hdhub')) icon = '🎬';
+                else if (pLower.includes('hdhub')) icon = '🌐';
                 else if (pLower.includes('ola')) icon = '🔥';
                 else if (pLower.includes('desire')) icon = '🎬';
                 else if (pLower.includes('ddlbase')) icon = '📦';
@@ -2595,6 +2648,19 @@
                 }).join('');
             }
 
+            // Populate Header Audio Track Selector
+            const headerSelect = document.getElementById('headerAudioTrackSelect');
+            if (headerSelect && tracks && tracks.length > 0) {
+                headerSelect.innerHTML = tracks.map((track, idx) => {
+                    const trackIndex = track.index !== undefined ? track.index : idx;
+                    const lang = (track.language || track.lang || 'und').toUpperCase();
+                    const title = track.title || track.name || `Track ${trackIndex + 1}`;
+                    const tCodec = (track.codec || detectedCodec || 'aac').toUpperCase();
+                    return `<option value="${trackIndex}" ${trackIndex === selectedAudioTrackIndex ? 'selected' : ''}>[${lang}] ${title} (${tCodec})</option>`;
+                }).join('');
+                headerSelect.value = String(selectedAudioTrackIndex);
+            }
+
             return {
                 detectedCodec,
                 detectedCodecDisplay: codecDisplay,
@@ -2604,17 +2670,28 @@
             };
         }
 
-        function selectAudioTrack(trackIndex) {
-            selectedAudioTrackIndex = trackIndex;
+        async function selectAudioTrack(trackIndex) {
+            selectedAudioTrackIndex = Number(trackIndex);
             const tracks = currentAudioProbeData?.audio_tracks || currentAudioProbeData?.tracks || [];
-            const track = tracks.find(t => (t.index !== undefined ? t.index : 0) === trackIndex) || tracks[trackIndex];
-            const trackName = track ? (track.title || track.language || `Track ${trackIndex + 1}`) : `Track ${trackIndex + 1}`;
+            const track = tracks.find(t => (t.index !== undefined ? t.index : 0) === selectedAudioTrackIndex) || tracks[selectedAudioTrackIndex];
+            const trackName = track ? (track.title || track.language || `Track ${selectedAudioTrackIndex + 1}`) : `Track ${selectedAudioTrackIndex + 1}`;
 
-            showToast(`🎧 Selected Track ${trackIndex + 1}: ${trackName}`);
+            showToast(`🎧 Selected Track ${selectedAudioTrackIndex + 1}: ${trackName}`);
+
+            // Sync header select dropdown
+            const headerSelect = document.getElementById('headerAudioTrackSelect');
+            if (headerSelect) headerSelect.value = String(selectedAudioTrackIndex);
+
             renderAudioProbeUI(currentAudioProbeData, currentDirectUrl || currentStreamUrl);
 
-            // Switch or reload active stream with the newly selected track
-            switchPlaybackEngine('transcode', true);
+            // Reload active stream with newly selected audio track via HLS transmuxer
+            const target = currentDirectUrl || currentStreamUrl;
+            if (target) {
+                const currentTime = Math.floor(getCurrentPlaybackTime());
+                const hlsUrl = `${API_BASE}/api/hls/master.m3u8?url=${encodeURIComponent(target)}&track=${selectedAudioTrackIndex}`;
+                showToast(`🔄 Switching Audio Track to ${trackName}...`);
+                await startPlayback(hlsUrl, currentTime);
+            }
         }
 
         function getCurrentPlaybackTime() {
@@ -2998,64 +3075,312 @@
                 </button>
             `;
 
-            // Zero-friction Auto-VLC transition for non-web containers (MKV, 4K HEVC)
-            if (autoVlcForMkv && (streamMeta.is_mkv || formatLabel.includes('MKV') || formatLabel.includes('HEVC'))) {
-                closeVideoPlayer();
-                showToast(`🚀 Auto-launching ${formatLabel} in VLC Player...`);
-                openExternalVLC(directUrl);
-                return;
-            }
-
             // Auto-probe stream audio and detect TrueHD/DTS/AC3
             const probeResult = await fetchAudioProbe(directUrl);
 
-            if (probeResult && probeResult.needsTranscode) {
-                // Seamlessly auto-activate Smart Transcode or display informative toast so user hears audio on first play!
-                showToast(`🎧 Detected ${probeResult.detectedCodecDisplay}: Auto-activating Smart Audio Transcode (AAC)...`);
-                await switchPlaybackEngine('transcode', true);
-            } else {
-                await startPlayback(directUrl);
+            // Directly start browser playback via Hls.js / HLS transmuxer
+            await startPlayback(directUrl);
+        }
+
+        // Embed Provider Definitions & Fallback Generators
+        const EMBED_PROVIDERS = {
+            filmu: {
+                name: 'Filmu',
+                movie: (id) => `https://embed.filmu.in/movie/${id}`,
+                tv: (id, s, e) => `https://embed.filmu.in/tv/${id}/${s}/${e}`
+            },
+            cinezo: {
+                name: 'Cinezo',
+                movie: (id) => `https://cinezo.net/embed/movie/${id}`,
+                tv: (id, s, e) => `https://cinezo.net/embed/tv/${id}/${s}/${e}`
+            },
+            vidbolt: {
+                name: 'Vidbolt',
+                movie: (id) => `https://vidbolt.org/embed/movie/${id}`,
+                tv: (id, s, e) => `https://vidbolt.org/embed/tv/${id}/${s}/${e}`
+            },
+            vidy: {
+                name: 'Vidy',
+                movie: (id) => `https://vidsrc.pm/embed/movie/${id}`,
+                tv: (id, s, e) => `https://vidsrc.pm/embed/tv/${id}/${s}/${e}`
+            },
+            vidrift: {
+                name: 'Vidrift',
+                movie: (id) => `https://vidrift.com/embed/movie/${id}`,
+                tv: (id, s, e) => `https://vidrift.com/embed/tv/${id}/${s}/${e}`
             }
+        };
+
+        function getCleanMediaId() {
+            let rawId = activeSeriesMeta?.imdb_id || activeSeriesMeta?.id || activeSeriesMeta?.tmdb_id || '';
+            if (!rawId && currentSearchReleases && currentSearchReleases.length > 0) {
+                const rel = currentSearchReleases[0];
+                rawId = rel.imdb_id || rel.tmdb_id || '';
+            }
+            let clean = String(rawId || '').trim();
+            if (clean.toLowerCase().startsWith('imdb:')) clean = clean.substring(5).trim();
+            if (clean.toLowerCase().startsWith('tmdb:')) clean = clean.substring(5).trim();
+            if (clean.toLowerCase().startsWith('tt')) clean = clean.toLowerCase();
+            return clean;
+        }
+
+        function resolveEmbedUrl(providerKey) {
+            const prov = EMBED_PROVIDERS[providerKey] || EMBED_PROVIDERS.filmu;
+            const cleanId = getCleanMediaId();
+            const isSeries = Boolean(
+                (activeSeriesMeta && (
+                    activeSeriesMeta.type === 'series' ||
+                    activeSeriesMeta.type === 'tv' ||
+                    (activeSeriesMeta.seasons && activeSeriesMeta.seasons.length > 0) ||
+                    (activeSeriesMeta.episodes && activeSeriesMeta.episodes.length > 0)
+                )) || activeSeriesTitle
+            );
+            const season = activeSeasonNumber || 1;
+            const episode = activeEpisodeNumber || 1;
+
+            if (currentStreamUrl && (
+                currentStreamUrl.includes('embed.filmu.in') ||
+                currentStreamUrl.includes('cinezo') ||
+                currentStreamUrl.includes('vidbolt') ||
+                currentStreamUrl.includes('vidsrc') ||
+                currentStreamUrl.includes('vidrift')
+            )) {
+                if (currentStreamUrl.includes(providerKey)) {
+                    return currentStreamUrl;
+                }
+            }
+
+            if (!cleanId) {
+                return isSeries ? prov.tv('tt0944947', season, episode) : prov.movie('tt0137523');
+            }
+
+            return isSeries ? prov.tv(cleanId, season, episode) : prov.movie(cleanId);
+        }
+
+        function loadEmbedStream(providerKey) {
+            currentEmbedProvider = providerKey || currentEmbedProvider || 'filmu';
+            const select = document.getElementById('embedProviderSelect');
+            if (select) select.value = currentEmbedProvider;
+
+            const embedUrl = resolveEmbedUrl(currentEmbedProvider);
+            const iframe = document.getElementById('embedIframe');
+            if (iframe) {
+                iframe.src = embedUrl;
+                showToast(`🎬 Loaded Embed Provider: ${EMBED_PROVIDERS[currentEmbedProvider]?.name || currentEmbedProvider}`);
+                const badge = document.getElementById('playerStreamBadge');
+                if (badge) {
+                    badge.innerHTML = `<span class="text-indigo-400 font-bold font-mono">🎬 Embed (${EMBED_PROVIDERS[currentEmbedProvider]?.name || currentEmbedProvider})</span> <span class="text-zinc-400">• Fallback Stream</span>`;
+                }
+            }
+        }
+
+        function switchEmbedProvider(providerKey) {
+            loadEmbedStream(providerKey);
+        }
+
+        function updateEngineToggleUI(mode) {
+            const btnDirect = document.getElementById('engineToggleDirect');
+            const btnEmbed = document.getElementById('engineToggleEmbed');
+            const btnVlc = document.getElementById('engineToggleVlc');
+            const activeClass = "px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all bg-white text-zinc-950 shadow-sm";
+            const inactiveClass = "px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all text-zinc-400 hover:text-white hover:bg-white/5";
+            const vlcInactiveClass = "px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all text-orange-400 hover:text-orange-300 hover:bg-white/5";
+
+            if (btnDirect) btnDirect.className = mode === 'direct' ? activeClass : inactiveClass;
+            if (btnEmbed) btnEmbed.className = mode === 'embed' ? activeClass : inactiveClass;
+            if (btnVlc) btnVlc.className = mode === 'vlc' ? activeClass : vlcInactiveClass;
+        }
+
+        function switchPlayerMode(mode) {
+            const video = document.getElementById('videoElement');
+            const embed = document.getElementById('embedIframe');
+            const providerContainer = document.getElementById('embedProviderContainer');
+            const headerAudio = document.getElementById('headerAudioSelectorContainer');
+            const controlsContainer = document.getElementById('playerControlsContainer');
+
+            if (mode === 'vlc') {
+                const target = currentDirectUrl || currentStreamUrl;
+                const currentTime = getCurrentPlaybackTime();
+                if (video) video.pause();
+                showToast("▲ Launching Hardware Bitstreaming in VLC...");
+                openExternalVLC(target, currentTime);
+                return;
+            }
+
+            if (mode === 'embed') {
+                currentPlayerMode = 'embed';
+                updateEngineToggleUI('embed');
+
+                if (video) {
+                    video.pause();
+                    video.classList.add('hidden');
+                }
+                if (hlsPlayerInstance) {
+                    hlsPlayerInstance.destroy();
+                    hlsPlayerInstance = null;
+                }
+
+                if (embed) embed.classList.remove('hidden');
+                if (providerContainer) providerContainer.classList.remove('hidden');
+                if (headerAudio) headerAudio.classList.add('hidden');
+                if (controlsContainer) controlsContainer.classList.add('hidden');
+
+                loadEmbedStream(currentEmbedProvider);
+                return;
+            }
+
+            // mode === 'direct'
+            currentPlayerMode = 'direct';
+            updateEngineToggleUI('direct');
+
+            if (embed) {
+                embed.src = '';
+                embed.classList.add('hidden');
+            }
+            if (providerContainer) providerContainer.classList.add('hidden');
+            if (headerAudio) headerAudio.classList.remove('hidden');
+            if (controlsContainer) controlsContainer.classList.remove('hidden');
+
+            if (video) {
+                video.classList.remove('hidden');
+                const target = currentDirectUrl || currentStreamUrl;
+                if (target) {
+                    const currentTime = getCurrentPlaybackTime();
+                    startPlayback(target, currentTime);
+                }
+            }
+        }
+
+        function initEmbedPostMessageListener() {
+            window.addEventListener('message', (event) => {
+                try {
+                    let data = event.data;
+                    if (typeof data === 'string') {
+                        try {
+                            data = JSON.parse(data);
+                        } catch (e) {
+                            return;
+                        }
+                    }
+                    if (!data || typeof data !== 'object') return;
+
+                    const curTime = data.currentTime !== undefined ? Number(data.currentTime) : (data.time !== undefined ? Number(data.time) : null);
+                    const dur = data.duration !== undefined ? Number(data.duration) : null;
+
+                    if (curTime !== null && !isNaN(curTime) && curTime > 0) {
+                        const curDisplay = document.getElementById('playerCurrentTimeDisplay');
+                        if (curDisplay) curDisplay.innerText = formatTime(curTime);
+                        if (dur && dur > 0) {
+                            const durDisplay = document.getElementById('playerDurationDisplay');
+                            if (durDisplay) durDisplay.innerText = formatTime(dur);
+                            const bar = document.getElementById('playerProgressBar');
+                            if (bar) {
+                                bar.max = dur;
+                                bar.value = curTime;
+                            }
+                        }
+
+                        if (Date.now() - (lastEmbedProgressSave || 0) > 5000) {
+                            lastEmbedProgressSave = Date.now();
+                            if (currentMediaTitle) {
+                                addToHistory(
+                                    currentMediaTitle,
+                                    currentMediaBadge || 'Embed',
+                                    currentStreamUrl,
+                                    currentDirectUrl || currentStreamUrl,
+                                    currentDirectUrl || currentStreamUrl,
+                                    activeSeriesMeta?.poster || '',
+                                    curTime,
+                                    dur || 0
+                                );
+                            }
+                        }
+                    }
+                } catch (err) {
+                    console.warn('Embed postMessage handler notice:', err);
+                }
+            });
         }
 
         async function startPlayback(url, resumeTime = 0) {
             const video = document.getElementById('videoElement');
-            const isHlsOrDash = url.includes('.m3u8') || url.includes('.mpd');
+            const embed = document.getElementById('embedIframe');
+            if (!video) return;
 
-            // Handle non-web playable containers automatically
+            // Ensure direct video viewport is active
+            if (video.classList.contains('hidden')) video.classList.remove('hidden');
+            if (embed && !embed.classList.contains('hidden')) {
+                embed.src = '';
+                embed.classList.add('hidden');
+            }
+            currentPlayerMode = 'direct';
+            updateEngineToggleUI('direct');
+
+            // Teardown running HLS or Shaka player instances
+            if (hlsPlayerInstance) {
+                hlsPlayerInstance.destroy();
+                hlsPlayerInstance = null;
+            }
+            if (shakaPlayerInstance) {
+                try {
+                    await shakaPlayerInstance.unload();
+                } catch (e) {}
+            }
+
+            const urlLower = (url || '').toLowerCase();
+            const isAlreadyHls = urlLower.includes('.m3u8') || url.includes('/api/hls/');
+            const isMkv = urlLower.includes('.mkv') || (currentAudioProbeData?.container && String(currentAudioProbeData.container).toLowerCase().includes('mkv'));
+            const isNonAac = currentAudioProbeData && (
+                isUnsupportedBrowserCodec(currentAudioProbeData.detected_codec) ||
+                (currentAudioProbeData.audio_tracks && currentAudioProbeData.audio_tracks.some(t => isUnsupportedBrowserCodec(t.codec)))
+            );
+
+            // Determine target playback URL: Route MKV or non-AAC directly into HLS transmuxer
+            let playUrl = url;
+            let shouldUseHls = isAlreadyHls;
+
+            if (!isAlreadyHls && (isMkv || isNonAac)) {
+                playUrl = `${API_BASE}/api/hls/master.m3u8?url=${encodeURIComponent(url)}&track=${selectedAudioTrackIndex}`;
+                shouldUseHls = true;
+                console.log('MKV or Non-AAC stream detected -> routing to HLS transmuxer:', playUrl);
+            }
+
+            // CRITICAL FIX: Eliminate forced automatic ejection to VLC!
             video.onerror = (e) => {
-                console.warn('HTML5 Video Codec Notice:', video.error ? video.error.code : 'unknown', 'URL:', url);
-                if (autoVlcForMkv) {
-                    closeVideoPlayer();
-                    showToast('⚠️ Video codec not supported by browser. Auto-launched in VLC.');
-                    openExternalVLC(url);
-                } else {
-                    document.getElementById('playerStreamBadge').innerHTML = `
-                        <span class="text-amber-400">⚠️ Codec / MKV requires external player or transcode.</span>
-                        <button onclick="switchPlaybackEngine('transcode')" class="ml-2 px-2.5 py-1 rounded bg-indigo-600 text-white font-bold text-xs hover:bg-indigo-500 transition-colors">
+                console.warn('HTML5 Video Codec Notice/Error:', video.error ? video.error.code : 'unknown', 'URL:', playUrl);
+                // If direct playback encountered an error and was not already using HLS transmuxer, try HLS transmuxer before displaying notice
+                if (!playUrl.includes('/api/hls/')) {
+                    const hlsFallbackUrl = `${API_BASE}/api/hls/master.m3u8?url=${encodeURIComponent(url)}&track=${selectedAudioTrackIndex}`;
+                    console.log('Direct HTML5 playback error. Auto-falling back to HLS transmuxer:', hlsFallbackUrl);
+                    loadHlsStream(hlsFallbackUrl, video.currentTime || resumeTime || 0);
+                    return;
+                }
+
+                // If HLS also had an issue, display clean in-player controls without closing player or forcing VLC!
+                const badge = document.getElementById('playerStreamBadge');
+                if (badge) {
+                    badge.innerHTML = `
+                        <span class="text-amber-400 font-mono text-xs">⚠️ Codec stream requires transcode or fallback.</span>
+                        <button onclick="switchPlaybackEngine('transcode')" class="ml-2 px-2.5 py-1 rounded bg-indigo-600 text-white font-bold text-xs hover:bg-indigo-500 transition-colors shadow">
                             🔄 Smart Transcode
                         </button>
-                        <button onclick="openExternalVLC('${url.replace(/'/g, "\\'")}')" class="ml-2 px-2.5 py-1 rounded bg-orange-600 text-white font-bold text-xs hover:bg-orange-500 transition-colors">
+                        <button onclick="switchPlayerMode('embed')" class="ml-2 px-2.5 py-1 rounded bg-purple-600 text-white font-bold text-xs hover:bg-purple-500 transition-colors shadow">
+                            🎬 Embed Fallback
+                        </button>
+                        <button onclick="openExternalVLC('${url.replace(/'/g, "\\'")}')" class="ml-2 px-2.5 py-1 rounded bg-orange-600 text-white font-bold text-xs hover:bg-orange-500 transition-colors shadow">
                             ▲ Launch in VLC
                         </button>
                     `;
                 }
             };
 
-            if (shakaPlayerInstance && isHlsOrDash) {
-                try {
-                    await shakaPlayerInstance.load(url);
-                    if (resumeTime > 0) video.currentTime = resumeTime;
-                    video.play().catch(e => console.log('Shaka auto-play notice:', e));
-                    initWebAudio();
-                    return;
-                } catch (e) {
-                    console.warn('Shaka load failed, falling back to native src:', e);
-                }
+            if (shouldUseHls) {
+                loadHlsStream(playUrl, resumeTime);
+                return;
             }
 
-            // Direct native stream playback
-            video.src = url;
+            // Direct native stream playback for MP4 with standard AAC
+            video.src = playUrl;
             video.load();
             if (resumeTime > 0) {
                 video.addEventListener('loadedmetadata', () => {
@@ -3074,20 +3399,103 @@
             }
         }
 
+        function loadHlsStream(hlsUrl, resumeTime = 0) {
+            const video = document.getElementById('videoElement');
+            if (!video) return;
+
+            if (hlsPlayerInstance) {
+                hlsPlayerInstance.destroy();
+                hlsPlayerInstance = null;
+            }
+
+            if (typeof Hls !== 'undefined' && Hls.isSupported()) {
+                const hls = new Hls({
+                    maxBufferLength: 30,
+                    maxMaxBufferLength: 600,
+                    maxBufferSize: 60 * 1000 * 1000,
+                    abrBandWidthFactor: 0.65,
+                    abrBandWidthUpFactor: 0.5,
+                    enableWorker: true,
+                    lowLatencyMode: false,
+                    startPosition: resumeTime > 0 ? resumeTime : -1
+                });
+                hlsPlayerInstance = hls;
+                hls.loadSource(hlsUrl);
+                hls.attachMedia(video);
+
+                hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                    if (resumeTime > 0 && hls.config.startPosition < 0) {
+                        try { video.currentTime = resumeTime; } catch (e) {}
+                    }
+                    video.play().catch(e => console.log('HLS.js autoplay notice:', e));
+                    initWebAudio();
+                });
+
+                hls.on(Hls.Events.ERROR, (event, data) => {
+                    console.warn('HLS.js event notice:', data.type, data.details);
+                    if (data.fatal) {
+                        switch (data.type) {
+                            case Hls.ErrorTypes.NETWORK_ERROR:
+                                console.log('HLS network error, recovering...');
+                                hls.startLoad();
+                                break;
+                            case Hls.ErrorTypes.MEDIA_ERROR:
+                                console.log('HLS media error, recovering...');
+                                hls.recoverMediaError();
+                                break;
+                            default:
+                                console.warn('HLS unrecoverable error:', data);
+                                hls.destroy();
+                                break;
+                        }
+                    }
+                });
+            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                // Native Safari / iOS HLS
+                video.src = hlsUrl;
+                video.load();
+                if (resumeTime > 0) {
+                    video.addEventListener('loadedmetadata', () => {
+                        try { video.currentTime = resumeTime; } catch (err) {}
+                    }, { once: true });
+                }
+                video.play().catch(e => console.log('Native HLS autoplay notice:', e));
+                initWebAudio();
+            } else {
+                video.src = hlsUrl;
+                video.load();
+                video.play().catch(e => console.log('Direct HLS fallback notice:', e));
+            }
+        }
+
         function closeVideoPlayer() {
             const overlay = document.getElementById('playerOverlay');
             const video = document.getElementById('videoElement');
+            const embed = document.getElementById('embedIframe');
             const panel = document.getElementById('audioControlPanel');
             const backdrop = document.getElementById('audioModalBackdrop');
             if (panel) panel.classList.add('hidden');
             if (backdrop) backdrop.classList.add('hidden');
+            if (hlsPlayerInstance) {
+                hlsPlayerInstance.destroy();
+                hlsPlayerInstance = null;
+            }
             if (shakaPlayerInstance) {
                 shakaPlayerInstance.unload().catch(() => {});
             }
-            video.pause();
-            video.removeAttribute('src');
-            video.load();
+            if (embed) {
+                embed.src = '';
+                embed.classList.add('hidden');
+            }
+            if (video) {
+                video.pause();
+                video.removeAttribute('src');
+                video.load();
+                video.classList.remove('hidden');
+            }
             overlay.classList.add('hidden');
+            currentPlayerMode = 'direct';
+            updateEngineToggleUI('direct');
             currentPlaybackEngine = 'direct';
             transcodeBaseOffset = 0;
             isUserScrubbing = false;
@@ -3398,7 +3806,7 @@
             const directStr = (currentDirectUrl || '').toLowerCase();
             const isMkv = badgeStr.includes('MKV') || directStr.endsWith('.mkv');
 
-            if (vlcModeEnabled || (autoVlcForMkv && isMkv)) {
+            if (vlcModeEnabled) {
                 openExternalVLC(currentDirectUrl || currentStreamUrl, item.currentTime || 0);
                 return;
             }

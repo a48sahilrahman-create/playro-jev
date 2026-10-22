@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Playro TV</string>
+    <string name="server_hint">Enter Playro Cloud or Server URL (e.g. https://your-server.com/?tv=1)</string>
+</resources>

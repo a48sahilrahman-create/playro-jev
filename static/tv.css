@@ -1,0 +1,227 @@
+/* ========================================================================== */
+/* PLAYRO Universal OTT -- 10-Foot Google / Android TV Experience Style Sheet */
+/* ========================================================================== */
+
+/* 1. TV Root & Default Cursor Management */
+body.tv-mode {
+    user-select: none;
+    -webkit-user-select: none;
+    overflow-x: hidden;
+}
+
+/* Gate cursor: none strictly on TV mode with pointer: coarse / TV checks so desktop browsers retain visible cursors */
+@media (pointer: coarse), (tv) {
+    body.tv-mode:not(.mouse-active),
+    body.tv-mode:not(.mouse-active) * {
+        cursor: none !important;
+    }
+}
+
+body.tv-mode.mouse-active,
+body.tv-mode.mouse-active * {
+    cursor: default !important;
+}
+
+/* 2. Safe Overscan Margins for 10-Foot Viewports */
+/* Applied strictly to inner content wrappers (.tv-viewport-content) to preserve edge-to-edge sticky headers and full-bleed backdrops */
+body.tv-mode .tv-viewport-content {
+    padding: 32px 56px !important;
+    box-sizing: border-box;
+}
+
+@media (tv) {
+    .tv-viewport-content {
+        padding: 32px 56px !important;
+        box-sizing: border-box;
+    }
+}
+
+/* 3. High-Contrast Glowing Focus Indicators */
+/* Rely on box-shadow / ring glow rather than massive scale transforms that clip cards against container edges */
+body.tv-mode :focus,
+body.tv-mode .focusable:focus,
+body.tv-mode .focused {
+    outline: none !important;
+    box-shadow: 0 0 0 3.5px #00e5ff, 0 0 22px rgba(0, 229, 255, 0.75) !important;
+    transform: none !important;
+    transition: box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    z-index: 30 !important;
+}
+
+@media (tv) {
+    :focus,
+    .focusable:focus,
+    .focused {
+        outline: none !important;
+        box-shadow: 0 0 0 3.5px #00e5ff, 0 0 22px rgba(0, 229, 255, 0.75) !important;
+        transform: none !important;
+        transition: box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        z-index: 30 !important;
+    }
+}
+
+/* Card Focus Elevation */
+body.tv-mode .media-card:focus,
+body.tv-mode #trendingGrid > div:focus,
+body.tv-mode #searchResultsGrid > div:focus,
+body.tv-mode #continueWatchingList > div:focus {
+    outline: none !important;
+    box-shadow: 0 0 0 3.5px #00e5ff, 0 0 22px rgba(0, 229, 255, 0.75) !important;
+    transform: none !important;
+    z-index: 40 !important;
+}
+
+@media (tv) {
+    .media-card:focus,
+    #trendingGrid > div:focus,
+    #searchResultsGrid > div:focus,
+    #continueWatchingList > div:focus {
+        outline: none !important;
+        box-shadow: 0 0 0 3.5px #00e5ff, 0 0 22px rgba(0, 229, 255, 0.75) !important;
+        transform: none !important;
+        z-index: 40 !important;
+    }
+}
+
+/* Emerald Neon Accent for Active & Play Buttons */
+body.tv-mode button.btn-emerald:focus,
+body.tv-mode #heroPlayBtn:focus {
+    box-shadow: 0 0 0 3.5px #00e676, 0 0 22px rgba(0, 230, 118, 0.75) !important;
+}
+
+@media (tv) {
+    button.btn-emerald:focus,
+    #heroPlayBtn:focus {
+        box-shadow: 0 0 0 3.5px #00e676, 0 0 22px rgba(0, 230, 118, 0.75) !important;
+    }
+}
+
+/* Button, Input & Slider Thumb Focus */
+body.tv-mode button:focus,
+body.tv-mode a:focus {
+    outline: none !important;
+    box-shadow: 0 0 0 3.5px #00e5ff, 0 0 22px rgba(0, 229, 255, 0.75) !important;
+    transform: none !important;
+}
+
+body.tv-mode input:focus,
+body.tv-mode input[type="text"]:focus {
+    outline: none !important;
+    box-shadow: 0 0 0 3.5px #00e5ff, 0 0 22px rgba(0, 229, 255, 0.75) !important;
+    border-color: #00e5ff !important;
+}
+
+body.tv-mode input[type="range"]:focus::-webkit-slider-thumb {
+    box-shadow: 0 0 0 3.5px #00e5ff, 0 0 22px rgba(0, 229, 255, 0.75) !important;
+    transform: none !important;
+}
+
+body.tv-mode input[type="range"]:focus::-moz-range-thumb {
+    box-shadow: 0 0 0 3.5px #00e5ff, 0 0 22px rgba(0, 229, 255, 0.75) !important;
+    transform: none !important;
+}
+
+@media (tv) {
+    button:focus,
+    a:focus {
+        outline: none !important;
+        box-shadow: 0 0 0 3.5px #00e5ff, 0 0 22px rgba(0, 229, 255, 0.75) !important;
+        transform: none !important;
+    }
+
+    input:focus,
+    input[type="text"]:focus {
+        outline: none !important;
+        box-shadow: 0 0 0 3.5px #00e5ff, 0 0 22px rgba(0, 229, 255, 0.75) !important;
+        border-color: #00e5ff !important;
+    }
+
+    input[type="range"]:focus::-webkit-slider-thumb {
+        box-shadow: 0 0 0 3.5px #00e5ff, 0 0 22px rgba(0, 229, 255, 0.75) !important;
+        transform: none !important;
+    }
+
+    input[type="range"]:focus::-moz-range-thumb {
+        box-shadow: 0 0 0 3.5px #00e5ff, 0 0 22px rgba(0, 229, 255, 0.75) !important;
+        transform: none !important;
+    }
+}
+
+/* 4. 10-Foot Typography Scale */
+body.tv-mode h1 { font-size: 2.75rem !important; line-height: 1.15; font-weight: 800; }
+body.tv-mode h2 { font-size: 1.85rem !important; line-height: 1.25; font-weight: 700; }
+body.tv-mode h3 { font-size: 1.4rem !important; line-height: 1.3; font-weight: 600; }
+body.tv-mode p { font-size: 1.1rem !important; line-height: 1.6; }
+body.tv-mode .badge,
+body.tv-mode [class*="badge"] {
+    font-size: 0.85rem !important;
+    padding: 4px 10px !important;
+    font-weight: 600;
+}
+body.tv-mode .card-title,
+body.tv-mode #trendingGrid h3 {
+    font-size: 1.15rem !important;
+    font-weight: 600;
+}
+
+@media (tv) {
+    h1 { font-size: 2.75rem !important; line-height: 1.15; font-weight: 800; }
+    h2 { font-size: 1.85rem !important; line-height: 1.25; font-weight: 700; }
+    h3 { font-size: 1.4rem !important; line-height: 1.3; font-weight: 600; }
+    p { font-size: 1.1rem !important; line-height: 1.6; }
+    .badge,
+    [class*="badge"] {
+        font-size: 0.85rem !important;
+        padding: 4px 10px !important;
+        font-weight: 600;
+    }
+    .card-title,
+    #trendingGrid h3 {
+        font-size: 1.15rem !important;
+        font-weight: 600;
+    }
+}
+
+/* 5. 10-Foot Voice Search HUD Backdrop */
+#tvVoiceModal {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: rgba(9, 9, 11, 0.88);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+#tvVoiceModal.active { opacity: 1; pointer-events: auto; }
+
+/* Pulsing Concentric Waveform Rings Animation */
+.voice-pulse-ring {
+    position: absolute;
+    border-radius: 50%;
+    border: 2px solid rgba(0, 229, 255, 0.6);
+    animation: voicePulse 2.4s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
+}
+.voice-pulse-ring:nth-child(2) { animation-delay: 0.6s; border-color: rgba(0, 229, 255, 0.4); }
+.voice-pulse-ring:nth-child(3) { animation-delay: 1.2s; border-color: rgba(0, 230, 118, 0.35); }
+.voice-pulse-ring:nth-child(4) { animation-delay: 1.8s; border-color: rgba(0, 229, 255, 0.2); }
+@keyframes voicePulse {
+    0% { transform: scale(0.65); opacity: 0.9; }
+    50% { transform: scale(1.15); opacity: 0.5; box-shadow: 0 0 25px rgba(0, 229, 255, 0.4); }
+    100% { transform: scale(1.65); opacity: 0; }
+}
+
+/* Voice Mic Icon, Status & High-Contrast Live Transcript Display */
+.tv-voice-mic {
+    width: 80px; height: 80px; border-radius: 50%; background: #00e5ff;
+}
+#tvVoiceStatus { font-size: 1.25rem; font-weight: 700; color: #00e5ff; letter-spacing: 0.1em; }
+#tvVoiceTranscript {
+    font-size: 1.85rem; font-weight: 600; color: #f4f4f5; text-align: center; max-width: 800px;
+}
+/* End of 10-foot TV Stylesheet */

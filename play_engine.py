@@ -27,6 +27,16 @@ from link_resolver import LinkResolver
 from media_db import MediaDB
 from parallel_dispatcher import ParallelMediaDispatcher, is_strict_match, clean_media_title
 
+BULLETPROOF_ENGINE_SRC = r"C:\Users\sahil\workspaces\bulletproof_streaming_engine\src"
+if os.path.exists(BULLETPROOF_ENGINE_SRC) and BULLETPROOF_ENGINE_SRC not in sys.path:
+    sys.path.insert(0, BULLETPROOF_ENGINE_SRC)
+
+try:
+    from speed_gated_resolver import SpeedGatedResolver
+    speed_gated_resolver = SpeedGatedResolver()
+except Exception as _e:
+    speed_gated_resolver = None
+
 VLC_PATHS = [
     r"C:\Program Files\VideoLAN\VLC\vlc.exe",
     r"C:\Program Files (x86)\VideoLAN\VLC\vlc.exe",
@@ -97,25 +107,92 @@ def rank_release(release: dict) -> tuple:
     elif "BLURAY" in codec:
         codec_score = 15
 
-    # Prioritize hosts with instant 1-click playable direct video streams (R2 / Pixeldrain / Google CDN / NexDrive)
+    # Prioritize hosts with RFC 7233 Range support for 1DM parallel swarm streaming:
+    # Uses SpeedGatedResolver: Seekable Workers (+20) > Range Mirrors Pixeldrain/R2 (+15) > Gateways > Fallback
+    # Strictly prioritizes seekable Cloudflare Workers and range mirrors over sequential Google CDN tokens for 4K / high-bitrate
     target = (release.get("target_url") or release.get("direct_url") or "").lower()
     label = (release.get("label") or "").lower()
     title = (release.get("title") or "").lower()
     combined_meta = f"{target} {label} {title}"
 
-    host_score = 0
-    if any(h in combined_meta for h in ["nexdrive", "vcloud", "r2.", "pixeldrain", "googleusercontent"]):
-        host_score = 100
-    elif "hubdrive" in combined_meta:
-        host_score = 90  # Prioritize HubDrive over HubCloud and quota-vulnerable workers
-    elif any(h in combined_meta for h in ["hubcloud", "gamerxyt", "worker"]):
-        host_score = 70
-    elif target.startswith("magnet:"):
-        host_score = 60
-    elif "t.me" in target or "tg://" in target:
-        host_score = 50
-    elif "unblockedgames" in target or "driveseed" in target:
-        host_score = 10  # Deprioritize multi-step gateways with intermittent Cloudflare blocks
+    is_4k = "2160P" in res or "4K" in res
+    is_high_bitrate = (
+        is_4k
+        or size_gb >= 8.0
+        or "REMUX" in codec
+        or "BLURAY" in codec
+        or any(k in combined_meta for k in ["high-bitrate", "high bitrate", "remux"])
+    )
+
+    is_google = (
+        any(g in combined_meta for g in ["googleusercontent", "drive.usercontent.google.com"])
+        or "10gbps" in combined_meta
+        or "gpdl." in combined_meta
+        or "google cdn" in combined_meta
+    )
+    is_worker = any(w in combined_meta for w in ["workers.dev", "/zfile/", "worker"])
+    is_range_mirror = any(r in combined_meta for r in ["pixeldrain", "r2.", "cloudflarestorage", "fastdl", "fast-dl", "fuckingfast"])
+
+    if speed_gated_resolver:
+        cand_for_speed = release if (release.get("url") or release.get("direct_url")) else {"url": release.get("target_url", ""), **release}
+        base_speed = speed_gated_resolver.score_candidate(cand_for_speed)
+        is_seekable = bool(release.get("seekable")) or (base_speed >= 95 and not is_range_mirror)
+        if is_high_bitrate:
+            if is_google:
+                # Remove +15 bonus for Google CDN / googleusercontent and demote to fallback status
+                host_score = 40
+            elif is_worker or (base_speed >= 95 and not is_range_mirror) or is_seekable:
+                # Cloudflare Workers and seekable mirrors (base_speed >= 95 or is_worker): give +20 bonus
+                eff_base = max(base_speed, 95) if (base_speed >= 95 or is_seekable) else max(base_speed, 85)
+                host_score = eff_base + 20
+            elif is_range_mirror or base_speed >= 90:
+                # Range-capable mirrors (Pixeldrain / R2, base_speed >= 90): give +15 bonus
+                eff_base = max(base_speed, 90) if is_range_mirror else base_speed
+                host_score = eff_base + 15
+            else:
+                host_score = base_speed
+        else:
+            host_score = base_speed
+    else:
+        host_score = 0
+        if is_high_bitrate:
+            if is_google:
+                # Remove +10 bonus for googleusercontent.com and demote to fallback status
+                host_score = 40
+            elif is_worker:
+                # Cloudflare Workers: +20 bonus
+                host_score = 95
+            elif any(h in combined_meta for h in ["pixeldrain", "fastdl", "nexdrive", "vcloud"]):
+                # Range-capable mirrors (Pixeldrain / FastDL, base_speed >= 90): +15 bonus
+                host_score = 105
+            elif "r2." in combined_meta or "cloudflarestorage" in combined_meta:
+                # Range-capable mirror (R2): +15 bonus
+                host_score = 95
+            elif "hubdrive" in combined_meta:
+                host_score = 90
+            elif any(h in combined_meta for h in ["hubcloud", "gamerxyt"]):
+                host_score = 75
+            elif target.startswith("magnet:"):
+                host_score = 60
+            elif "t.me" in target or "tg://" in target:
+                host_score = 50
+            elif "unblockedgames" in target or "driveseed" in target:
+                host_score = 10
+        else:
+            if any(h in combined_meta for h in ["googleusercontent", "pixeldrain", "fastdl", "nexdrive", "vcloud"]):
+                host_score = 100
+            elif "hubdrive" in combined_meta:
+                host_score = 90
+            elif any(h in combined_meta for h in ["hubcloud", "gamerxyt", "worker"]):
+                host_score = 75
+            elif "r2." in combined_meta:
+                host_score = 80
+            elif target.startswith("magnet:"):
+                host_score = 60
+            elif "t.me" in target or "tg://" in target:
+                host_score = 50
+            elif "unblockedgames" in target or "driveseed" in target:
+                host_score = 10
 
     return (single_ep_bonus, res_score, size_gb, codec_score, host_score)
 
@@ -128,6 +205,93 @@ class PlayEngine:
         self.verifier = StreamVerifier()
         self.link_resolver = LinkResolver()
         self.vlc_path = find_vlc()
+        self.speed_gated_resolver = speed_gated_resolver
+
+    def sort_candidates_speed_gated(self, candidates: list, is_4k: bool = False) -> list:
+        """
+        Sorts candidates using SpeedGatedResolver:
+        - For 4K and high-bitrate releases:
+          - Cloudflare Workers and seekable mirrors (base_speed >= 95 or is_worker): +20 bonus
+          - Range-capable mirrors (Pixeldrain / R2, base_speed >= 90): +15 bonus
+          - Remove +10/+15 bonus for Google CDN / googleusercontent and demote to fallback status
+        """
+        if not candidates:
+            return []
+        if self.speed_gated_resolver:
+            scored = []
+            for c in candidates:
+                c_copy = dict(c)
+                cand_for_speed = c_copy if (c_copy.get("url") or c_copy.get("direct_url")) else {"url": c_copy.get("target_url", ""), **c_copy}
+                base_score = self.speed_gated_resolver.score_candidate(cand_for_speed)
+                c_res = str(c_copy.get("resolution") or "").upper()
+                c_size_gb = extract_file_size_gb(c_copy)
+                c_codec = str(c_copy.get("codec") or "").upper()
+                c_target = (c_copy.get("target_url") or c_copy.get("direct_url") or "").lower()
+                c_label = str(c_copy.get("label") or "").lower()
+                c_title = str(c_copy.get("title") or "").lower()
+                c_meta = f"{c_target} {c_label} {c_title}"
+
+                c_is_4k = is_4k or ("2160P" in c_res or "4K" in c_res)
+                c_is_high_bitrate = (
+                    c_is_4k
+                    or c_size_gb >= 8.0
+                    or "REMUX" in c_codec
+                    or "BLURAY" in c_codec
+                    or any(k in c_meta for k in ["high-bitrate", "high bitrate", "remux"])
+                )
+
+                c_is_google = (
+                    any(g in c_meta for g in ["googleusercontent", "drive.usercontent.google.com"])
+                    or "10gbps" in c_meta
+                    or "gpdl." in c_meta
+                    or "google cdn" in c_meta
+                )
+                c_is_worker = any(w in c_meta for w in ["workers.dev", "/zfile/", "worker"])
+                c_is_range_mirror = any(r in c_meta for r in ["pixeldrain", "r2.", "cloudflarestorage", "fastdl", "fast-dl", "fuckingfast"])
+                c_is_seekable = bool(c_copy.get("seekable")) or (base_score >= 95 and not c_is_range_mirror)
+
+                if c_is_high_bitrate:
+                    if c_is_google:
+                        # Demote googleusercontent to fallback status and remove bonuses
+                        base_score = 40
+                    elif c_is_worker or (base_score >= 95 and not c_is_range_mirror) or c_is_seekable:
+                        # Cloudflare Workers and seekable mirrors (base_speed >= 95 or is_worker): +20 bonus
+                        eff_base = max(base_score, 95) if (base_score >= 95 or c_is_seekable) else max(base_score, 85)
+                        base_score = eff_base + 20
+                    elif c_is_range_mirror or base_score >= 90:
+                        # Range-capable mirrors (Pixeldrain / R2, base_speed >= 90): +15 bonus
+                        eff_base = max(base_score, 90) if c_is_range_mirror else base_score
+                        base_score = eff_base + 15
+                c_copy["_speed_score"] = base_score
+                scored.append(c_copy)
+            return sorted(scored, key=lambda r: (r.get("_speed_score", 0), rank_release(r)), reverse=True)
+        return sorted(candidates, key=rank_release, reverse=True)
+
+    async def resolve_candidate_speed_gated(self, candidate: dict, probe_speed: bool = False, min_mbps: float = 15.0) -> dict:
+        """
+        Resolves candidate link through SpeedGatedResolver with speed scoring and optional throughput probe.
+        """
+        target_url = candidate.get("target_url") or candidate.get("direct_url") or ""
+        resolved = await self.resolve(target_url)
+        direct_url = resolved.get("direct_stream_url") or target_url
+
+        if self.speed_gated_resolver:
+            score = self.speed_gated_resolver.score_candidate({"url": direct_url, **candidate})
+            resolved["speed_score"] = score
+            resolved["is_fast_cdn"] = score >= 90
+
+            if probe_speed and direct_url and direct_url.startswith("http"):
+                try:
+                    async with httpx.AsyncClient(timeout=6.0) as client:
+                        speed_res = await self.speed_gated_resolver.probe_socket_speed(
+                            client, direct_url, required_mbps=min_mbps
+                        )
+                        resolved["socket_speed_mbps"] = speed_res.get("measured_mbps", 0.0)
+                        resolved["speed_gated_pass"] = speed_res.get("passed", False)
+                except Exception as e:
+                    resolved["speed_probe_error"] = str(e)
+
+        return resolved
 
     async def search(self, query: str, year: Optional[str] = None, imdb_id: Optional[str] = None, season: Optional[int] = None, episode: Optional[int] = None, tmdb_id: Optional[str] = None) -> dict:
         """
@@ -277,23 +441,32 @@ class PlayEngine:
                 "total_ms": total_ms
             }
 
-        # Step 2: Rank & Pick Best Candidate (prioritize pre-verified direct_url)
-        sorted_releases = sorted(catalog, key=lambda r: (1 if (r.get('direct_url') and 'http' in r.get('direct_url')) else 0, rank_release(r)), reverse=True)
+        # Step 2: Rank & Pick Best Candidate via SpeedGatedResolver
+        is_4k_title = any("2160P" in str(c.get("resolution", "")).upper() or "4K" in str(c.get("resolution", "")).upper() for c in catalog)
+        sorted_releases = self.sort_candidates_speed_gated(catalog, is_4k=is_4k_title)
 
         # Step 3 & 4: Resolve and Verify in Order of Quality (MUST be a verified direct video stream)
+        # Prioritizes seekable Cloudflare Workers and range mirrors over sequential Google CDN tokens for 4K
         t2 = time.perf_counter()
         resolved_stream = None
         chosen_release = None
         verification_data = None
+        fallback_google_stream = None
 
         for cand in sorted_releases:
             # If direct_url is already known and saved in DB
             saved_dir = cand.get("direct_url")
-            if saved_dir and ("r2.dev" in saved_dir or "cloudflarestorage.com" in saved_dir or "pixeldrain" in saved_dir or "dl.olamdrive" in saved_dir):
-                resolved_stream = saved_dir
-                chosen_release = cand
-                verification_data = {"valid": True, "format": "MKV (EBML)"}
-                break
+            if saved_dir:
+                is_google = "googleusercontent" in saved_dir or "drive.usercontent.google.com" in saved_dir
+                is_seekable_or_range = any(k in saved_dir for k in ["pixeldrain", "dl.olamdrive", "fastdl", "r2.dev", "cloudflarestorage.com", "workers.dev", "/zfile/"])
+                if is_seekable_or_range or (not is_4k_title and is_google):
+                    resolved_stream = saved_dir
+                    chosen_release = cand
+                    verification_data = {"valid": True, "format": "MKV (EBML)"}
+                    break
+                elif is_google and is_4k_title and not fallback_google_stream:
+                    # Stash googleusercontent as fallback for 4K while checking if seekable/range hosts can resolve
+                    fallback_google_stream = (saved_dir, cand, {"valid": True, "format": "MKV (EBML)"})
 
             target_u = cand.get("target_url", "")
             res = await self.link_resolver.resolve_auto(target_u)
@@ -305,6 +478,9 @@ class PlayEngine:
                     chosen_release = cand
                     verification_data = v
                     break
+
+        if not resolved_stream and fallback_google_stream:
+            resolved_stream, chosen_release, verification_data = fallback_google_stream
 
         resolve_verify_ms = round((time.perf_counter() - t2) * 1000, 2)
 

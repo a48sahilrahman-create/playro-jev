@@ -14,3 +14,13 @@ Thumbs.db
 
 # Repomix outputs
 repomix-output.xml
+
+# Android build outputs & gradle
+.gradle/
+android_tv/.gradle/
+android_tv/app/build/
+android_tv/local.properties
+*.apk
+media.db
+*.png
+.bin/

@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+
+    <!-- Background: Dark Zinc #09090b -->
+    <path
+        android:fillColor="#09090b"
+        android:pathData="M0,0h320v180h-320z" />
+
+    <!-- Bottom Accent: Playro Orange #f97316 -->
+    <path
+        android:fillColor="#f97316"
+        android:pathData="M0,176h320v4h-320z" />
+
+    <!-- Center Ambient Glow / Outer Ring -->
+    <path
+        android:fillColor="#18181b"
+        android:pathData="M160,24a56,56 0 1,0 0,112a56,56 0 1,0 0,-112z" />
+
+    <path
+        android:fillColor="#27272a"
+        android:pathData="M160,38a42,42 0 1,0 0,84a42,42 0 1,0 0,-84z" />
+
+    <!-- Core Circle with Orange Accent Ring -->
+    <path
+        android:fillColor="#09090b"
+        android:strokeColor="#f97316"
+        android:strokeWidth="3"
+        android:pathData="M160,46a34,34 0 1,0 0,68a34,34 0 1,0 0,-68z" />
+
+    <!-- Playro Play Icon -->
+    <path
+        android:fillColor="#f97316"
+        android:pathData="M152,65c0,-1.5 1.6,-2.5 3,-1.7l18,14c1.3,0.8 1.3,2.6 0,3.4l-18,14c-1.4,0.8 -3,-0.2 -3,-1.7z" />
+
+    <!-- Side Accent Separators -->
+    <path
+        android:strokeColor="#27272a"
+        android:strokeWidth="1"
+        android:pathData="M90,134h30" />
+
+    <path
+        android:strokeColor="#27272a"
+        android:strokeWidth="1"
+        android:pathData="M200,134h30" />
+
+    <!-- TV Pill Badge -->
+    <path
+        android:fillColor="#f97316"
+        android:pathData="M146,124h28c5.5,0 10,4.5 10,10c0,5.5 -4.5,10 -10,10h-28c-5.5,0 -10,-4.5 -10,-10c0,-5.5 4.5,-10 10,-10z" />
+
+    <!-- TV Letter T -->
+    <path
+        android:fillColor="#09090b"
+        android:pathData="M151.5,128h6v2.5h-1.75v5.5h-2.5v-5.5h-1.75z" />
+
+    <!-- TV Letter V -->
+    <path
+        android:fillColor="#09090b"
+        android:pathData="M159.5,128h2.5l2,5.5h0.2l2,-5.5h2.3l-3.2,8h-2.2z" />
+
+</vector>

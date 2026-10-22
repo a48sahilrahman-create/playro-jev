@@ -2,11 +2,12 @@
 <html lang="en" class="dark h-full bg-zinc-950 text-zinc-100">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>PLAYRO — Universal OTT Platform</title>
     <meta name="description" content="Cross-platform high-speed streaming platform for Windows, Android, Google TV, and Smart TVs">
     <meta name="theme-color" content="#09090b">
     <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="stylesheet" href="/static/tv.css">
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -55,6 +56,24 @@
             50% { opacity: 1; }
         }
         .pulse-glow { animation: pulse-glow 2s infinite ease-in-out; }
+
+        /* Safe Area Padding for Overlays */
+        #playerOverlay {
+            padding-top: env(safe-area-inset-top, 0px);
+            padding-bottom: env(safe-area-inset-bottom, 0px);
+            padding-left: env(safe-area-inset-left, 0px);
+            padding-right: env(safe-area-inset-right, 0px);
+        }
+        #playerHeaderBar {
+            padding-top: calc(1rem + env(safe-area-inset-top, 0px));
+            padding-left: calc(1rem + env(safe-area-inset-left, 0px));
+            padding-right: calc(1rem + env(safe-area-inset-right, 0px));
+        }
+        #playerControlsContainer {
+            padding-bottom: calc(1.5rem + env(safe-area-inset-bottom, 0px));
+            padding-left: calc(1rem + env(safe-area-inset-left, 0px));
+            padding-right: calc(1rem + env(safe-area-inset-right, 0px));
+        }
     </style>
 </head>
 <body class="h-full flex flex-col antialiased selection:bg-zinc-800">
@@ -90,17 +109,17 @@
         </div>
 
         <!-- Search & Control Cluster -->
-        <div class="flex items-center gap-3">
+        <div class="flex items-center gap-2 sm:gap-3">
             <!-- Search Bar -->
             <div class="relative flex items-center">
-                <input type="text" id="searchInput" placeholder="Search movies, series..."
-                    class="focusable w-48 sm:w-64 md:w-80 bg-zinc-900/90 border border-white/10 rounded-full pl-9 pr-10 py-1.5 text-xs sm:text-sm text-zinc-100 placeholder-zinc-500 focus:w-80 md:focus:w-96 transition-all duration-300 font-medium shadow-inner"
+                <input id="searchInput" type="search" enterkeyhint="search" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Search movies, series..."
+                    class="focusable w-32 sm:w-48 md:w-64 focus:w-44 sm:focus:w-64 md:focus:w-80 bg-zinc-900/90 border border-white/10 rounded-full pl-9 pr-10 py-1.5 text-base sm:text-sm text-zinc-100 placeholder-zinc-500 transition-all duration-300 font-medium shadow-inner"
                     tabindex="0"
                     onkeydown="handleSearchInputKeydown(event)">
                 <svg class="absolute left-3 w-4 h-4 text-zinc-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
 
                 <!-- Mic Voice Search Button -->
-                <button id="voiceBtn" onclick="toggleVoiceSearch()" title="Voice Search (Smart TV / Mobile)"
+                <button id="voiceBtn" onclick="triggerTVVoiceSearch()" title="Voice Search (Smart TV / Mobile)"
                     class="focusable absolute right-1.5 p-1.5 rounded-full text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors" tabindex="0">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 02-3-3V5a3 3 0 116 0v6a3 3 0 02-3 3z"></path></svg>
                 </button>
@@ -109,27 +128,50 @@
                 <div id="searchAutocomplete" class="hidden absolute top-full left-0 right-0 mt-2 bg-zinc-900/95 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl overflow-hidden z-50 max-h-96 overflow-y-auto divide-y divide-white/5"></div>
             </div>
 
-            <!-- VLC Mode Toggle Button -->
+            <!-- VLC Mode Toggle Button (Desktop/Tablet) -->
             <button id="vlcToggleBtn" onclick="toggleVlcMode()"
-                class="focusable flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border border-white/10 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 transition-colors"
+                class="focusable hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border border-white/10 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 transition-colors"
                 tabindex="0" title="Toggle External VLC Streaming">
                 <span class="text-orange-400 font-bold">▲</span>
                 <span class="hidden sm:inline">VLC:</span>
                 <span id="vlcStateLabel" class="font-mono text-zinc-400 font-semibold">OFF</span>
             </button>
 
-            <!-- Audio & Codec Studio Button -->
-            <button id="navAudioStudioBtn" onclick="toggleAudioPanel(true)" class="focusable flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border border-indigo-500/30 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 transition-colors" tabindex="0" title="Audio & Codec Studio (AAC / Dolby / DTS / Boost)"><span>🎧 Audio</span><span class="text-[10px] font-mono px-1 rounded bg-indigo-500/30 text-indigo-200">AAC/DTS</span></button>
+            <!-- Audio & Codec Studio Button (Desktop/Tablet) -->
+            <button id="navAudioStudioBtn" onclick="toggleAudioPanel(true)" class="focusable hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border border-indigo-500/30 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 transition-colors" tabindex="0" title="Audio & Codec Studio (AAC / Dolby / DTS / Boost)"><span>🎧 Audio</span><span class="text-[10px] font-mono px-1 rounded bg-indigo-500/30 text-indigo-200">AAC/DTS</span></button>
 
-            <!-- Catalog Addons Quick Button -->
-            <button onclick="openAddonsModal()" class="focusable p-2 rounded-full text-zinc-400 hover:text-white hover:bg-zinc-800 border border-white/10 transition-colors" tabindex="0" title="Stremio Catalog Addons">
+            <!-- Catalog Addons Quick Button (Desktop/Tablet) -->
+            <button onclick="openAddonsModal()" class="focusable hidden md:flex p-2 rounded-full text-zinc-400 hover:text-white hover:bg-zinc-800 border border-white/10 transition-colors" tabindex="0" title="Stremio Catalog Addons">
                 🧩
             </button>
 
-            <!-- Quick Settings Button -->
-            <button onclick="openConfigModal()" class="focusable p-2 rounded-full text-zinc-400 hover:text-white hover:bg-zinc-800 border border-white/10 transition-colors" tabindex="0" title="Settings & Auth">
+            <!-- Quick Settings Button (Desktop/Tablet) -->
+            <button onclick="openConfigModal()" class="focusable hidden md:flex p-2 rounded-full text-zinc-400 hover:text-white hover:bg-zinc-800 border border-white/10 transition-colors" tabindex="0" title="Settings & Auth">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
             </button>
+
+            <!-- Mobile Menu Button (< 768px) -->
+            <div class="relative md:hidden">
+                <button id="mobileMenuBtn" onclick="toggleMobileMenu()" class="focusable p-2 rounded-full text-zinc-400 hover:text-white hover:bg-zinc-800 border border-white/10 transition-colors flex items-center justify-center" tabindex="0" title="Menu">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path></svg>
+                </button>
+                <!-- Mobile Menu Dropdown -->
+                <div id="mobileMenuDropdown" class="hidden absolute right-0 top-full mt-2 w-48 bg-zinc-900/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl p-2 z-50 flex flex-col gap-1 text-xs">
+                    <button onclick="toggleVlcMode(); toggleMobileMenu();" class="flex items-center justify-between px-3 py-2 rounded-xl hover:bg-zinc-800 text-left text-zinc-200 transition-colors">
+                        <span class="flex items-center gap-2"><span class="text-orange-400 font-bold">▲</span> VLC Stream</span>
+                        <span id="mobileVlcStateLabel" class="font-mono text-zinc-400 text-[10px]">OFF</span>
+                    </button>
+                    <button onclick="toggleAudioPanel(true); toggleMobileMenu();" class="flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-zinc-800 text-left text-indigo-300 transition-colors">
+                        <span>🎧</span> Audio Studio
+                    </button>
+                    <button onclick="openAddonsModal(); toggleMobileMenu();" class="flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-zinc-800 text-left text-zinc-200 transition-colors">
+                        <span>🧩</span> Addons
+                    </button>
+                    <button onclick="openConfigModal(); toggleMobileMenu();" class="flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-zinc-800 text-left text-zinc-200 transition-colors">
+                        <span>⚡</span> Settings &amp; Auth
+                    </button>
+                </div>
+            </div>
         </div>
     </header>
 
@@ -154,7 +196,7 @@
                         <span class="text-zinc-400">•</span>
                         <span id="heroRating" class="text-amber-400">★ 9.0</span>
                     </div>
-                    <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-zinc-900/80 border border-white/10 text-xs text-zinc-300 font-mono"><span class="h-2 w-2 rounded-full bg-emerald-500"></span><span>Engine: Smart Audio &amp; Zero-Copy Transcode Active</span></div>
+                    <div class="hidden md:inline-flex items-center gap-2 px-3 py-1 rounded-full bg-zinc-900/80 border border-white/10 text-xs text-zinc-300 font-mono"><span class="h-2 w-2 rounded-full bg-emerald-500"></span><span>Engine: Smart Audio &amp; Zero-Copy Transcode Active</span></div>
                 </div>
                 <h1 id="heroTitle" class="text-3xl sm:text-4xl md:text-5xl font-extrabold tracking-tight text-white leading-tight">
                     The Dark Knight
@@ -176,6 +218,13 @@
                     </button>
                 </div>
             </div>
+
+            <!-- Hero Scroll Down Button -->
+            <button id="heroScrollDownBtn" onclick="scrollToCatalog()" aria-label="Scroll to catalog"
+                class="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center gap-1 text-zinc-400 hover:text-white transition-all cursor-pointer group focusable rounded-full p-2" tabindex="0">
+                <span class="text-[10px] uppercase font-mono tracking-widest text-zinc-400 group-hover:text-zinc-200 transition-colors">Catalog</span>
+                <svg class="w-5 h-5 animate-bounce text-zinc-400 group-hover:text-white transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"></path></svg>
+            </button>
         </section>
 
         <!-- Continue Watching Rail (Local Persistence) -->
@@ -218,7 +267,7 @@
                     <span>🔥 Trending Across Content Networks</span>
                 </h2>
                 <div class="flex items-center gap-3">
-                    <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-zinc-900/80 border border-white/10 text-xs text-zinc-300 font-mono"><span class="h-2 w-2 rounded-full bg-emerald-500"></span><span>Engine: Smart Audio &amp; Zero-Copy Transcode Active</span></div>
+                    <div class="hidden md:inline-flex items-center gap-2 px-3 py-1 rounded-full bg-zinc-900/80 border border-white/10 text-xs text-zinc-300 font-mono"><span class="h-2 w-2 rounded-full bg-emerald-500"></span><span>Engine: Smart Audio &amp; Zero-Copy Transcode Active</span></div>
                     <div class="flex items-center gap-1.5 text-xs text-zinc-400 font-mono">
                         <span class="h-2 w-2 rounded-full bg-emerald-500 animate-ping"></span>
                         <span>Live Aggregator</span>
@@ -263,8 +312,15 @@
         </div>
     </div>
 
+    <!-- Floating Quick-Scroll Widget (Toggle Scroll Down / Scroll to Top) -->
+    <button id="quickScrollWidget" onclick="toggleQuickScroll()" class="fixed bottom-6 right-6 z-40 p-3 rounded-full bg-zinc-900/90 hover:bg-zinc-800 text-white border border-white/10 shadow-2xl glass-panel transition-all active:scale-95 flex items-center justify-center group focusable" tabindex="0" title="Scroll">
+        <svg id="quickScrollIcon" class="w-5 h-5 transition-transform duration-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"></path>
+        </svg>
+    </button>
+
     <!-- Sleek Toast Notification Container -->
-    <div id="toastContainer" class="fixed bottom-6 right-6 z-50 pointer-events-none space-y-2"></div>
+    <div id="toastContainer" class="fixed bottom-20 right-6 z-50 pointer-events-none space-y-2"></div>
 
     <!-- Embedded High-Performance Video Player Overlay -->
     <div id="playerOverlay" class="hidden fixed inset-0 z-50 bg-black flex flex-col justify-center items-center">
@@ -282,11 +338,19 @@
 
             <!-- Controls Cluster: Engine Toggle, Embed Provider, Audio Selector, Autoplay & VLC -->
             <div class="flex items-center gap-2 sm:gap-3 shrink-0 flex-wrap justify-end">
-                <!-- Engine Mode Toggle: [⚡ Direct HLS | 🎬 Embed Fallback | ▲ VLC Player] -->
+                <!-- Engine Mode Toggle: [⚡ Direct HLS | 🚀 1DM Swarm | 🌊 Bingr HLS | 🎬 Embed Fallback | ▲ VLC Player] -->
                 <div class="flex items-center bg-zinc-900/90 rounded-xl p-1 border border-white/10 shadow-lg" id="engineModeToggleGroup">
                     <button id="engineToggleDirect" onclick="switchPlayerMode('direct')" class="px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all bg-white text-zinc-950 shadow-sm" title="Direct HLS Transmuxer & Native Video">
                         <span>⚡</span>
                         <span class="hidden md:inline">Direct HLS</span>
+                    </button>
+                    <button id="engineToggleSwarm" onclick="switchPlayerMode('swarm')" class="px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all text-amber-400 hover:text-amber-300 hover:bg-white/5" title="Accelerated 1DM Swarm Engine (Multi-Socket 4K)">
+                        <span>🚀</span>
+                        <span class="hidden md:inline">1DM Swarm</span>
+                    </button>
+                    <button id="engineToggleBingrHls" onclick="switchPlayerMode('bingr_hls')" class="px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all text-cyan-400 hover:text-cyan-300 hover:bg-white/5" title="Bingr Dynamic HLS Transmuxer (RFC 8216 Smooth 4K)">
+                        <span>🌊</span>
+                        <span class="hidden md:inline">Bingr HLS</span>
                     </button>
                     <button id="engineToggleEmbed" onclick="switchPlayerMode('embed')" class="px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all text-zinc-400 hover:text-white hover:bg-white/5" title="Switch to Embed Fallback Player">
                         <span>🎬</span>
@@ -331,15 +395,39 @@
                 </div>
 
                 <!-- Dedicated Manual VLC Button -->
-                <button onclick="openExternalVLC(currentDirectUrl || currentStreamUrl)" class="focusable px-3 py-1.5 rounded-xl bg-orange-600/90 hover:bg-orange-600 text-white font-medium text-xs flex items-center gap-1.5 shadow-sm" tabindex="0" title="Launch in Desktop VLC">
+                <button onclick="openExternalVLC(currentDirectUrl || currentStreamUrl, 0, currentMirrorUrl, currentRawUrl)" class="focusable px-3 py-1.5 rounded-xl bg-orange-600/90 hover:bg-orange-600 text-white font-medium text-xs flex items-center gap-1.5 shadow-sm" tabindex="0" title="Launch in External VLC (Android/iOS/PC)">
                     <span>▲</span>
                     <span class="hidden sm:inline">VLC</span>
+                </button>
+
+                <!-- Copy Direct URL Button -->
+                <button onclick="copyDirectStreamUrl()" class="focusable px-3 py-1.5 rounded-xl bg-zinc-900/90 hover:bg-zinc-800 text-zinc-300 font-medium text-xs flex items-center gap-1.5 shadow-sm border border-white/10" tabindex="0" title="Copy Direct Stream URL">
+                    <span>📋</span>
+                    <span class="hidden sm:inline">Copy URL</span>
+                </button>
+
+                <!-- Open M3U Playlist Button -->
+                <button onclick="openM3UPlaylist()" class="focusable px-3 py-1.5 rounded-xl bg-zinc-900/90 hover:bg-zinc-800 text-indigo-300 font-medium text-xs flex items-center gap-1.5 shadow-sm border border-white/10" tabindex="0" title="Open M3U Playlist">
+                    <span>🎵</span>
+                    <span class="hidden sm:inline">M3U</span>
+                </button>
+
+                <!-- Dedicated Manual CX Explorer Button -->
+                <button onclick="openExternalCX(currentDirectUrl || currentStreamUrl, currentMirrorUrl, currentRawUrl)" class="focusable px-3 py-1.5 rounded-xl bg-cyan-700/80 hover:bg-cyan-600 text-white font-medium text-xs flex items-center gap-1.5 shadow-sm" tabindex="0" title="Launch in CX File Explorer (Android/TV)">
+                    <span>📁</span>
+                    <span class="hidden sm:inline">CX</span>
+                </button>
+
+                <!-- Dedicated Manual 1DM Button -->
+                <button onclick="openExternal1DM(currentDirectUrl || currentStreamUrl, currentMirrorUrl, currentRawUrl)" class="focusable px-3 py-1.5 rounded-xl bg-emerald-700/80 hover:bg-emerald-600 text-white font-medium text-xs flex items-center gap-1.5 shadow-sm" tabindex="0" title="Launch in 1DM Downloader/Player">
+                    <span>📥</span>
+                    <span class="hidden sm:inline">1DM</span>
                 </button>
             </div>
         </div>
 
         <!-- Dual Viewport: Video Element & Embed Fallback Iframe -->
-        <video id="videoElement" class="w-full h-full max-h-screen object-contain" controls autoplay playsinline></video>
+        <video id="videoElement" class="w-full h-full max-h-screen object-contain" autoplay playsinline></video>
         <iframe id="embedIframe" style="display:none; width:100%; height:100%; border:none;" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen></iframe>
 
         <!-- Playback Controls Alongside Video -->
@@ -486,6 +574,37 @@
                         <span>External VLC Player</span>
                     </span>
                     <span class="text-[10px] font-mono text-orange-400 font-bold">HW Bitstream</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- External Mobile & TV Players (Android / TV) -->
+        <div class="space-y-2 pt-2 border-t border-white/10">
+            <div class="flex items-center justify-between">
+                <label class="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider block font-mono">External Mobile &amp; TV Players</label>
+                <div class="relative">
+                    <select onchange="handleExternalPlayerChoice(this.value); this.value='';" class="bg-zinc-800 text-zinc-300 text-[11px] font-mono rounded-lg px-2 py-0.5 border border-white/10 cursor-pointer focus:outline-none" title="Select External Player">
+                        <option value="" disabled selected>Player Menu ▾</option>
+                        <option value="vlc">▲ VLC Player</option>
+                        <option value="cx">📁 CX File Explorer</option>
+                        <option value="1dm">📥 1DM Downloader</option>
+                    </select>
+                </div>
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+                <button onclick="openExternalCX(currentDirectUrl || currentStreamUrl, currentMirrorUrl, currentRawUrl)" class="px-3 py-2 rounded-xl text-left text-xs font-semibold flex items-center justify-between border transition-all bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border-white/10 hover:border-cyan-500/40 shadow-sm" title="Launch in CX File Explorer (Android / TV)">
+                    <span class="flex items-center gap-1.5">
+                        <span>📁</span>
+                        <span>CX Explorer</span>
+                    </span>
+                    <span class="text-[9px] font-mono text-cyan-400 font-bold uppercase">TV/App</span>
+                </button>
+                <button onclick="openExternal1DM(currentDirectUrl || currentStreamUrl, currentMirrorUrl, currentRawUrl)" class="px-3 py-2 rounded-xl text-left text-xs font-semibold flex items-center justify-between border transition-all bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border-white/10 hover:border-emerald-500/40 shadow-sm" title="Launch in 1DM Downloader/Player">
+                    <span class="flex items-center gap-1.5">
+                        <span>📥</span>
+                        <span>1DM Downloader</span>
+                    </span>
+                    <span class="text-[9px] font-mono text-emerald-400 font-bold uppercase">Android</span>
                 </button>
             </div>
         </div>
@@ -689,6 +808,8 @@
         let vlcModeEnabled = localStorage.getItem('playro_vlc_mode') === 'true';
         let currentStreamUrl = '';
         let currentDirectUrl = '';
+        let currentRawUrl = '';
+        let currentMirrorUrl = '';
         let currentMediaTitle = '';
         let currentMediaBadge = '';
         let watchHistory = [];
@@ -701,7 +822,9 @@
         let selectedTgBot = localStorage.getItem('playro_tg_bot') || 'Angela2_moviebot';
         let shakaPlayerInstance = null;
         let hlsPlayerInstance = null;
-        let currentPlayerMode = 'direct'; // 'direct', 'embed', 'vlc'
+        let currentPlayerMode = 'direct'; // 'direct', 'swarm', 'bingr_hls', 'embed', 'vlc'
+        let currentAcceleratedUrl = '';
+        let currentBingrHlsUrl = '';
         let currentEmbedProvider = 'autoembed'; // 'autoembed', 'vidsrc', 'vidsrcme', 'twoembed', 'filmu'
         let lastEmbedProgressSave = 0;
         let currentWaterfall = [];
@@ -736,6 +859,32 @@
         let pendingDirectSeekTime = null;
         let controlsHideTimeout = null;
 
+        function buildAcceleratedUrl(directUrl, mirrorUrl = '', rawUrl = '') {
+            if (!directUrl) return '';
+            const m = mirrorUrl || (typeof currentMirrorUrl !== 'undefined' ? currentMirrorUrl : '') || '';
+            const r = rawUrl || (typeof currentRawUrl !== 'undefined' ? currentRawUrl : '') || '';
+
+            // If directUrl is already an accelerated proxy URL, append missing params
+            if (directUrl.includes('/api/stream/accelerated')) {
+                let enhanced = directUrl;
+                if (m && !enhanced.includes('mirror=')) {
+                    enhanced += (enhanced.includes('?') ? '&' : '?') + 'mirror=' + encodeURIComponent(m);
+                }
+                if (r && !enhanced.includes('raw_url=')) {
+                    enhanced += (enhanced.includes('?') ? '&' : '?') + 'raw_url=' + encodeURIComponent(r);
+                }
+                if (enhanced.startsWith('/')) {
+                    enhanced = `${API_BASE}${enhanced}`;
+                }
+                return enhanced;
+            }
+
+            const mirrorParam = m ? `&mirror=${encodeURIComponent(m)}` : '';
+            const rawParam = r ? `&raw_url=${encodeURIComponent(r)}` : '';
+            const baseDirect = directUrl.startsWith('http') ? directUrl : (window.location.origin + (directUrl.startsWith('/') ? directUrl : '/' + directUrl));
+            return `${API_BASE}/api/stream/accelerated?url=${encodeURIComponent(baseDirect)}${mirrorParam}${rawParam}`;
+        }
+
         function showToast(message, type = 'info') {
             const container = document.getElementById('toastContainer');
             if (!container) return;
@@ -758,7 +907,6 @@
             updateVlcButtonUI();
             updateAutoVlcButtonUI();
             renderContinueWatching();
-            initShakaPlayer();
             initEmbedPostMessageListener();
             await loadTrendingCatalog();
             await checkAuthStatus();
@@ -774,7 +922,79 @@
             await loadInstalledAddons();
         });
 
-        // 0. Shaka Player Initializer
+        // Mobile Navigation & Scroll Helpers
+        function toggleMobileMenu() {
+            const menu = document.getElementById('mobileMenuDropdown');
+            if (menu) menu.classList.toggle('hidden');
+        }
+
+        function scrollToCatalog() {
+            const searchSec = document.getElementById('searchResultsSection');
+            const target = (searchSec && !searchSec.classList.contains('hidden'))
+                ? searchSec
+                : document.getElementById('trendingCatalogSection');
+            if (target) {
+                target.scrollIntoView({ behavior: 'smooth' });
+            }
+        }
+
+        function toggleQuickScroll() {
+            if (window.scrollY > 300) {
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+            } else {
+                scrollToCatalog();
+            }
+        }
+
+        window.addEventListener('scroll', () => {
+            const icon = document.getElementById('quickScrollIcon');
+            if (!icon) return;
+            if (window.scrollY > 300) {
+                icon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18"></path>';
+            } else {
+                icon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"></path>';
+            }
+        }, { passive: true });
+
+        // Direct Stream URL and M3U Playlist Handlers
+        async function copyDirectStreamUrl(streamUrl) {
+            let target = streamUrl || currentDirectUrl || currentStreamUrl;
+            if (!target) {
+                showToast("⚠️ No stream URL available to copy.", 3000);
+                return;
+            }
+            if (!/\.mkv|\.mp4|\.m3u8|\.webm|r2\.cloudflarestorage|pixeldrain/i.test(target)) {
+                try {
+                    const res = await fetch(`${API_BASE}/api/resolve-url?url=${encodeURIComponent(target)}`);
+                    if (res.ok) {
+                        const data = await res.json();
+                        if (data.direct_url) target = data.direct_url;
+                    }
+                } catch (e) {}
+            }
+            const fullUrl = target.startsWith('http') ? target : (window.location.origin + (target.startsWith('/') ? target : '/' + target));
+            try {
+                await navigator.clipboard.writeText(fullUrl);
+                showToast("📋 Direct stream URL copied to clipboard!", 3000);
+            } catch (e) {
+                prompt("Copy direct stream URL:", fullUrl);
+            }
+        }
+
+        async function openM3UPlaylist(streamUrl, title) {
+            let target = streamUrl || currentDirectUrl || currentStreamUrl;
+            const mediaTitle = title || currentMediaTitle || 'PLAYRO Stream';
+            if (!target) {
+                showToast("⚠️ No stream selected for M3U playlist.", 3000);
+                return;
+            }
+            const fullUrl = target.startsWith('http') ? target : (window.location.origin + (target.startsWith('/') ? target : '/' + target));
+            const m3uUrl = `${API_BASE}/api/playlist.m3u?url=${encodeURIComponent(fullUrl)}&title=${encodeURIComponent(mediaTitle)}`;
+            window.open(m3uUrl, '_blank');
+            showToast("🎵 Opening M3U Playlist...", 3000);
+        }
+
+        // Shaka Player Initializer (on-demand only, avoids DOM load collision with Hls.js)
         async function initShakaPlayer() {
             if (typeof shaka !== 'undefined') {
                 shaka.polyfill.installAll();
@@ -1458,6 +1678,8 @@
 
                 const firstRelease = releases[0];
                 const firstRawTarget = firstRelease ? (firstRelease.target_url || firstRelease.direct_url || '') : '';
+                const firstMirrorUrl = firstRelease ? (firstRelease.mirror_url || firstRelease.mirror || (Array.isArray(firstRelease.mirrors) ? firstRelease.mirrors[0] : '') || '') : '';
+                const safeFirstMirror = firstMirrorUrl.replace(/'/g, "\\'");
                 const firstStreamProxyUrl = firstRawTarget ? `${API_BASE}/playback/resolve?url=${encodeURIComponent(firstRawTarget)}&title=${encodeURIComponent(cleanDisplayTitle)}` : '';
 
                 // Render Full-Page Hero Canvas
@@ -1483,16 +1705,36 @@
                                 </p>
 
                                 ${!isTvSeries && releases.length > 0 ? `
-                                <div class="pt-3 flex flex-wrap gap-3 justify-center md:justify-start">
-                                    <button onclick="handlePlayClick(0, '${firstStreamProxyUrl.replace(/'/g, "\\'")}', '${firstRawTarget.replace(/'/g, "\\'")}', '${cleanDisplayTitle.replace(/'/g, "\\'")}', '${firstRelease?.resolution || '4K'}', '${posterUrl.replace(/'/g, "\\'")}')"
-                                        class="focusable px-6 py-3 rounded-2xl bg-white hover:bg-zinc-200 text-zinc-950 font-black text-xs sm:text-sm flex items-center gap-2 shadow-xl active:scale-[0.98] transition-all">
+                                <div class="pt-3 flex flex-wrap gap-2.5 justify-center md:justify-start items-center">
+                                    <button onclick="handlePlayClick(0, '${firstStreamProxyUrl.replace(/'/g, "\\'")}', '${firstRawTarget.replace(/'/g, "\\'")}', '${cleanDisplayTitle.replace(/'/g, "\\'")}', '${firstRelease?.resolution || '4K'}', '${posterUrl.replace(/'/g, "\\'")}', '${safeFirstMirror}')"
+                                        class="focusable px-6 py-3 rounded-2xl bg-white hover:bg-zinc-200 text-zinc-950 font-black text-xs sm:text-sm flex items-center gap-2 shadow-xl active:scale-[0.98] transition-all" title="Play in Web Player">
                                         <span>▶</span>
                                         <span>Play Best (${firstRelease?.resolution || '4K'} ~ ${firstRelease?.size || 'Direct'})</span>
                                     </button>
-                                    <button onclick="openExternalVLC('${firstStreamProxyUrl.replace(/'/g, "\\'")}')"
-                                        class="focusable px-5 py-3 rounded-2xl bg-orange-600/90 hover:bg-orange-600 text-white font-bold text-xs sm:text-sm flex items-center gap-2 shadow-lg transition-all">
+                                    <button onclick="openExternalVLC('${firstStreamProxyUrl.replace(/'/g, "\\'")}', 0, '${safeFirstMirror}', '${firstRawTarget.replace(/'/g, "\\'")}')"
+                                        class="focusable px-4 py-3 rounded-2xl bg-orange-600/90 hover:bg-orange-600 text-white font-bold text-xs sm:text-sm flex items-center gap-1.5 shadow-lg transition-all" title="Launch in VLC">
                                         <span>▲</span>
-                                        <span>Launch in VLC</span>
+                                        <span>VLC</span>
+                                    </button>
+                                    <button onclick="copyDirectStreamUrl('${firstStreamProxyUrl.replace(/'/g, "\\'")}')"
+                                        class="focusable px-3 py-3 rounded-2xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-bold text-xs sm:text-sm flex items-center gap-1.5 shadow-lg border border-white/10 transition-all" title="Copy Direct Stream URL">
+                                        <span>📋</span>
+                                        <span class="hidden sm:inline">Copy URL</span>
+                                    </button>
+                                    <button onclick="openM3UPlaylist('${firstStreamProxyUrl.replace(/'/g, "\\'")}', '${cleanDisplayTitle.replace(/'/g, "\\'")}')"
+                                        class="focusable px-3 py-3 rounded-2xl bg-zinc-800 hover:bg-zinc-700 text-indigo-400 font-bold text-xs sm:text-sm flex items-center gap-1.5 shadow-lg border border-white/10 transition-all" title="Open M3U Playlist">
+                                        <span>🎵</span>
+                                        <span class="hidden sm:inline">M3U</span>
+                                    </button>
+                                    <button onclick="openExternalCX('${firstStreamProxyUrl.replace(/'/g, "\\'")}', '${safeFirstMirror}', '${firstRawTarget.replace(/'/g, "\\'")}')"
+                                        class="focusable px-4 py-3 rounded-2xl bg-cyan-600/90 hover:bg-cyan-600 text-white font-bold text-xs sm:text-sm flex items-center gap-1.5 shadow-lg transition-all" title="Launch in CX File Explorer (Android/TV)">
+                                        <span>📁</span>
+                                        <span>CX Explorer</span>
+                                    </button>
+                                    <button onclick="openExternal1DM('${firstStreamProxyUrl.replace(/'/g, "\\'")}', '${safeFirstMirror}', '${firstRawTarget.replace(/'/g, "\\'")}')"
+                                        class="focusable px-4 py-3 rounded-2xl bg-emerald-600/90 hover:bg-emerald-600 text-white font-bold text-xs sm:text-sm flex items-center gap-1.5 shadow-lg transition-all" title="Launch in 1DM Downloader/Player">
+                                        <span>📥</span>
+                                        <span>1DM</span>
                                     </button>
                                 </div>` : ''}
                             </div>
@@ -1808,6 +2050,8 @@
                 const audio = r.audio || '';
                 const platform = normalizePlatform(r.platform || r.source || 'Cloud');
                 const rawTarget = r.target_url || r.direct_url || '';
+                const mirrorTarget = r.mirror_url || r.mirror || (Array.isArray(r.mirrors) ? r.mirrors[0] : '') || '';
+                const safeMirror = mirrorTarget.replace(/'/g, "\\'");
 
                 let cleanDisplayTitle = (r.title && r.title.length > 3) ? r.title : currentDetailLabelTitle;
                 cleanDisplayTitle = cleanDisplayTitle.replace(/\|\s*\[ALL\s*Episodes\]\s*\|?/gi, '')
@@ -1860,17 +2104,47 @@
                                 ${audio ? `<span>•</span><span class="text-zinc-300">${audio}</span>` : ''}
                             </div>
                         </div>
-                        <div class="flex items-center gap-2">
-                            <button onclick="handlePlayClick(${i}, '${safeStreamUrl}', '${safeRawTarget}', '${safeTitle}', '${resBadge}', '${safePoster}')"
-                                class="focusable flex-1 py-2.5 px-3 rounded-xl ${isTopCard ? 'bg-amber-400 hover:bg-amber-300 text-zinc-950 font-black shadow-amber-500/20 shadow-lg' : 'bg-white hover:bg-zinc-200 text-zinc-950 font-bold'} text-xs flex items-center justify-center gap-1.5 transition-colors shadow-sm active:scale-[0.98]"
-                                tabindex="0">
+                        <div class="flex items-center gap-1.5 flex-wrap">
+                            <button onclick="handlePlayClick(${i}, '${safeStreamUrl}', '${safeRawTarget}', '${safeTitle}', '${resBadge}', '${safePoster}', '${safeMirror}')"
+                                class="focusable flex-1 min-w-[110px] py-2.5 px-3 rounded-xl ${isTopCard ? 'bg-amber-400 hover:bg-amber-300 text-zinc-950 font-black shadow-amber-500/20 shadow-lg' : 'bg-white hover:bg-zinc-200 text-zinc-950 font-bold'} text-xs flex items-center justify-center gap-1.5 transition-colors shadow-sm active:scale-[0.98]"
+                                tabindex="0" title="Play in Web Player">
                                 <span>▶</span>
-                                <span>${isTopCard ? 'Play Best Stream' : 'Play Stream'}</span>
+                                <span class="truncate">${isTopCard ? 'Play Best Stream' : 'Play Stream'}</span>
                             </button>
-                            <button onclick="openExternalVLC('${safeStreamUrl}')"
-                                class="focusable p-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-orange-400 border border-white/10 text-xs font-bold transition-colors"
+                            <button onclick="playSwarmStream(${i}, '${safeStreamUrl}', '${safeRawTarget}', '${safeTitle}', '${resBadge}', '${safePoster}', '${safeMirror}')"
+                                class="focusable p-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-amber-400 border border-white/10 text-xs font-bold transition-colors shrink-0"
+                                tabindex="0" title="Play with Accelerated 1DM Swarm (Smooth 4K)">
+                                🚀
+                            </button>
+                            <button onclick="playBingrHLSStream(${i}, '${safeStreamUrl}', '${safeRawTarget}', '${safeTitle}', '${resBadge}', '${safePoster}')"
+                                class="focusable p-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-cyan-400 border border-white/10 text-xs font-bold transition-colors shrink-0"
+                                tabindex="0" title="Play with Bingr Dynamic HLS Transmuxer (Smooth 4K)">
+                                🌊
+                            </button>
+                            <button onclick="openExternalVLC('${safeStreamUrl}', 0, '${safeMirror}', '${safeRawTarget}')"
+                                class="focusable p-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-orange-400 border border-white/10 text-xs font-bold transition-colors shrink-0"
                                 tabindex="0" title="Launch in VLC">
                                 ▲
+                            </button>
+                            <button onclick="copyDirectStreamUrl('${safeStreamUrl}')"
+                                class="focusable p-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-white/10 text-xs font-bold transition-colors shrink-0"
+                                tabindex="0" title="Copy Direct Stream URL">
+                                📋
+                            </button>
+                            <button onclick="openM3UPlaylist('${safeStreamUrl}', '${safeTitle}')"
+                                class="focusable p-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-indigo-400 border border-white/10 text-xs font-bold transition-colors shrink-0"
+                                tabindex="0" title="Open M3U Playlist">
+                                🎵
+                            </button>
+                            <button onclick="openExternalCX('${safeStreamUrl}', '${safeMirror}', '${safeRawTarget}')"
+                                class="focusable p-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-cyan-400 border border-white/10 text-xs font-bold transition-colors shrink-0"
+                                tabindex="0" title="Launch in CX File Explorer (Android/TV)">
+                                📁
+                            </button>
+                            <button onclick="openExternal1DM('${safeStreamUrl}', '${safeMirror}', '${safeRawTarget}')"
+                                class="focusable p-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-emerald-400 border border-white/10 text-xs font-bold transition-colors shrink-0"
+                                tabindex="0" title="Launch in 1DM Downloader/Player">
+                                📥
                             </button>
                         </div>
                     </div>
@@ -1892,14 +2166,27 @@
             if (sorted.length > 0) {
                 streamsMount.innerHTML = `
                     <div id="streamsSection" class="mt-8 mb-4 p-4 rounded-2xl bg-zinc-900/90 border border-white/10 glass-panel">
-                        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                             <div>
                                 <div class="text-[10px] font-mono text-amber-400 font-bold uppercase tracking-wider">● Selected Playback Target</div>
                                 <h3 class="text-base sm:text-lg font-black text-white tracking-tight flex items-center gap-2">
                                     <span>${labelTitle}</span>
                                 </h3>
                             </div>
-                            <span id="streamsCountBadge" class="text-xs font-mono font-bold text-zinc-200 bg-zinc-800/90 px-3.5 py-1.5 rounded-xl border border-white/15 w-fit shadow-inner">${sorted.length} Direct Streams Found</span>
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <div class="relative flex items-center">
+                                    <select onchange="handleExternalBatchPlayer(this.value); this.value='';" class="focusable appearance-none bg-zinc-800/90 hover:bg-zinc-700 border border-white/15 text-zinc-200 text-xs font-semibold rounded-xl px-3 py-1.5 pr-7 cursor-pointer transition-all shadow-sm focus:outline-none" title="Launch Top Stream in External Player or Engine Mode">
+                                        <option value="" disabled selected>Stream Mode / Player ▾</option>
+                                        <option value="swarm">🚀 Accelerated 1DM Swarm (Smooth 4K)</option>
+                                        <option value="bingr_hls">🌊 Bingr Dynamic HLS (Smooth 4K)</option>
+                                        <option value="vlc">▲ VLC Player</option>
+                                        <option value="cx">📁 CX File Explorer</option>
+                                        <option value="1dm">📥 1DM Downloader</option>
+                                    </select>
+                                    <span class="absolute right-2.5 pointer-events-none text-[10px] text-zinc-400">▾</span>
+                                </div>
+                                <span id="streamsCountBadge" class="text-xs font-mono font-bold text-zinc-200 bg-zinc-800/90 px-3.5 py-1.5 rounded-xl border border-white/15 w-fit shadow-inner">${sorted.length} Direct Streams Found</span>
+                            </div>
                         </div>
                     </div>
                     <div id="sourceFiltersBarContainer" class="mb-4"></div>
@@ -2797,6 +3084,12 @@
                     <button onclick="openExternalVLC(currentDirectUrl || currentStreamUrl, ${targetTime})" class="ml-2 px-2.5 py-1 rounded bg-orange-600 hover:bg-orange-500 text-white font-bold text-xs transition-colors">
                         ▲ Launch in VLC
                     </button>
+                    <button onclick="openExternalCX(currentDirectUrl || currentStreamUrl)" class="ml-1.5 px-2.5 py-1 rounded bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs transition-colors" title="Launch in CX File Explorer">
+                        📁 CX
+                    </button>
+                    <button onclick="openExternal1DM(currentDirectUrl || currentStreamUrl)" class="ml-1.5 px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition-colors" title="Launch in 1DM Downloader/Player">
+                        📥 1DM
+                    </button>
                 `;
             }
         }
@@ -3106,8 +3399,14 @@
             }
 
             if (vlcModeEnabled) {
-                addToHistory(title, badge, streamUrl, rawTarget, streamUrl, posterUrl, 0, 0);
-                openExternalVLC(streamUrl);
+                const targetUrl = streamUrl || rawTarget || '';
+                addToHistory(title, badge, targetUrl, rawTarget, targetUrl, posterUrl, 0, 0);
+                try {
+                    await openExternalVLC(targetUrl);
+                } catch (err) {
+                    console.error("Failed to safely invoke openExternalVLC:", err);
+                    showToast("⚠️ Failed to launch VLC: " + (err?.message || err), 4000);
+                }
                 return;
             }
 
@@ -3130,6 +3429,12 @@
                         if (resData.direct_url) {
                             directUrl = resData.direct_url;
                         }
+                        if (resData.accelerated_url) {
+                            currentAcceleratedUrl = resData.accelerated_url;
+                        }
+                        if (resData.bingr_hls_url) {
+                            currentBingrHlsUrl = resData.bingr_hls_url;
+                        }
                         streamMeta = resData;
                     }
                 } catch (e) {
@@ -3137,6 +3442,15 @@
                 }
             }
             currentDirectUrl = directUrl;
+            currentRawUrl = rawTarget || '';
+            if (!currentAcceleratedUrl) {
+                const mirrorParam = currentMirrorUrl ? `&mirror=${encodeURIComponent(currentMirrorUrl)}` : '';
+                const rawParam = currentRawUrl ? `&raw_url=${encodeURIComponent(currentRawUrl)}` : '';
+                currentAcceleratedUrl = `${API_BASE}/api/stream/accelerated?url=${encodeURIComponent(directUrl)}${mirrorParam}${rawParam}`;
+            }
+            if (!currentBingrHlsUrl) {
+                currentBingrHlsUrl = `${API_BASE}/hls/manifest.m3u8?url=${encodeURIComponent(directUrl)}`;
+            }
 
             // Save to Watch History with full resume state
             addToHistory(title, badge, streamUrl, rawTarget, directUrl, posterUrl, 0, 0);
@@ -3153,16 +3467,34 @@
             document.getElementById('playerStreamBadge').innerHTML = `
                 <span class="text-emerald-400 font-bold font-mono">● ${formatLabel}</span>
                 <span class="text-zinc-400">• ${badge}</span>
-                <button onclick="openExternalVLC('${directUrl.replace(/'/g, "\\'")}')" class="ml-3 px-2 py-0.5 rounded bg-orange-600/90 hover:bg-orange-600 text-white font-bold text-[11px] transition-colors">
+                <button onclick="switchPlayerMode('swarm')" class="ml-2.5 px-2 py-0.5 rounded bg-amber-600/90 hover:bg-amber-600 text-white font-bold text-[11px] transition-colors" title="Switch to Accelerated 1DM Swarm Engine (Smooth 4K)">
+                    🚀 Swarm
+                </button>
+                <button onclick="switchPlayerMode('bingr_hls')" class="ml-1.5 px-2 py-0.5 rounded bg-cyan-600/90 hover:bg-cyan-600 text-white font-bold text-[11px] transition-colors" title="Switch to Bingr Dynamic HLS Transmuxer (Smooth 4K)">
+                    🌊 Bingr HLS
+                </button>
+                <button onclick="openExternalVLC('${directUrl.replace(/'/g, "\\'")}')" class="ml-1.5 px-2 py-0.5 rounded bg-orange-600/90 hover:bg-orange-600 text-white font-bold text-[11px] transition-colors" title="Open in VLC">
                     ▲ Open in VLC
+                </button>
+                <button onclick="openExternalCX('${directUrl.replace(/'/g, "\\'")}')" class="ml-1.5 px-2 py-0.5 rounded bg-cyan-600/90 hover:bg-cyan-600 text-white font-bold text-[11px] transition-colors" title="Open in CX File Explorer">
+                    📁 CX
+                </button>
+                <button onclick="openExternal1DM('${directUrl.replace(/'/g, "\\'")}')" class="ml-1.5 px-2 py-0.5 rounded bg-emerald-600/90 hover:bg-emerald-600 text-white font-bold text-[11px] transition-colors" title="Open in 1DM">
+                    📥 1DM
                 </button>
             `;
 
             // Auto-probe stream audio and detect TrueHD/DTS/AC3
             const probeResult = await fetchAudioProbe(directUrl);
 
-            // Directly start browser playback via Hls.js / HLS transmuxer (MKVs play natively inside browser)
-            await startPlayback(directUrl);
+            // Directly start browser playback via Hls.js / HLS transmuxer or Accelerated Swarm
+            if (currentPlayerMode === 'swarm') {
+                await startPlayback(currentAcceleratedUrl);
+            } else if (currentPlayerMode === 'bingr_hls') {
+                loadHlsStream(currentBingrHlsUrl);
+            } else {
+                await startPlayback(directUrl);
+            }
         }
 
         // Embed Provider Definitions & Fallback Generators
@@ -3301,13 +3633,19 @@
 
         function updateEngineToggleUI(mode) {
             const btnDirect = document.getElementById('engineToggleDirect');
+            const btnSwarm = document.getElementById('engineToggleSwarm');
+            const btnBingrHls = document.getElementById('engineToggleBingrHls');
             const btnEmbed = document.getElementById('engineToggleEmbed');
             const btnVlc = document.getElementById('engineToggleVlc');
             const activeClass = "px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all bg-white text-zinc-950 shadow-sm";
             const inactiveClass = "px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all text-zinc-400 hover:text-white hover:bg-white/5";
+            const swarmInactiveClass = "px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all text-amber-400 hover:text-amber-300 hover:bg-white/5";
+            const bingrInactiveClass = "px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all text-cyan-400 hover:text-cyan-300 hover:bg-white/5";
             const vlcInactiveClass = "px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all text-orange-400 hover:text-orange-300 hover:bg-white/5";
 
             if (btnDirect) btnDirect.className = mode === 'direct' ? activeClass : inactiveClass;
+            if (btnSwarm) btnSwarm.className = mode === 'swarm' ? activeClass : swarmInactiveClass;
+            if (btnBingrHls) btnBingrHls.className = mode === 'bingr_hls' ? activeClass : bingrInactiveClass;
             if (btnEmbed) btnEmbed.className = mode === 'embed' ? activeClass : inactiveClass;
             if (btnVlc) btnVlc.className = mode === 'vlc' ? activeClass : vlcInactiveClass;
         }
@@ -3355,6 +3693,52 @@
                 if (controlsContainer) controlsContainer.classList.add('hidden');
 
                 loadEmbedStream(currentEmbedProvider);
+                return;
+            }
+
+            if (mode === 'swarm') {
+                currentPlayerMode = 'swarm';
+                updateEngineToggleUI('swarm');
+
+                if (embed) {
+                    embed.src = '';
+                    embed.style.display = 'none';
+                    embed.classList.add('hidden');
+                }
+                if (providerContainer) providerContainer.classList.add('hidden');
+                if (headerAudio) headerAudio.classList.remove('hidden');
+                if (controlsContainer) controlsContainer.classList.remove('hidden');
+
+                const target = currentDirectUrl || currentStreamUrl;
+                if (target) {
+                    const currentTime = getCurrentPlaybackTime();
+                    const swarmUrl = `${API_BASE}/api/stream/accelerated?url=${encodeURIComponent(target)}`;
+                    showToast("🚀 Switched to Accelerated 1DM Swarm Stream (Multi-Socket 4K)");
+                    startPlayback(swarmUrl, currentTime);
+                }
+                return;
+            }
+
+            if (mode === 'bingr_hls') {
+                currentPlayerMode = 'bingr_hls';
+                updateEngineToggleUI('bingr_hls');
+
+                if (embed) {
+                    embed.src = '';
+                    embed.style.display = 'none';
+                    embed.classList.add('hidden');
+                }
+                if (providerContainer) providerContainer.classList.add('hidden');
+                if (headerAudio) headerAudio.classList.remove('hidden');
+                if (controlsContainer) controlsContainer.classList.remove('hidden');
+
+                const target = currentDirectUrl || currentStreamUrl;
+                if (target) {
+                    const currentTime = getCurrentPlaybackTime();
+                    const bingrHlsUrl = `${API_BASE}/hls/manifest.m3u8?url=${encodeURIComponent(target)}`;
+                    showToast("🌊 Switched to Bingr Dynamic HLS Transmuxer (RFC 8216 Byte-Range)");
+                    loadHlsStream(bingrHlsUrl, currentTime);
+                }
                 return;
             }
 
@@ -3433,10 +3817,16 @@
             });
         }
 
-        async function startPlayback(url, resumeTime = 0) {
+        let hlsTransmuxRetryCount = 0;
+
+        async function startPlayback(url, resumeTime = 0, isRetry = false) {
             const video = document.getElementById('videoElement');
             const embed = document.getElementById('embedIframe');
             if (!video) return;
+
+            if (!isRetry) {
+                hlsTransmuxRetryCount = 0;
+            }
 
             // Ensure direct video viewport is active
             video.style.display = 'block';
@@ -3446,12 +3836,18 @@
                 embed.style.display = 'none';
                 embed.classList.add('hidden');
             }
-            currentPlayerMode = 'direct';
-            updateEngineToggleUI('direct');
+            if (currentPlayerMode !== 'swarm' && currentPlayerMode !== 'bingr_hls') {
+                currentPlayerMode = 'direct';
+            }
+            updateEngineToggleUI(currentPlayerMode);
 
-            // Teardown running HLS or Shaka player instances
+            // Properly clean up any existing Hls.js or Shaka instance before attaching new media
             if (hlsPlayerInstance) {
-                hlsPlayerInstance.destroy();
+                try {
+                    hlsPlayerInstance.stopLoad();
+                    hlsPlayerInstance.detachMedia();
+                    hlsPlayerInstance.destroy();
+                } catch (e) {}
                 hlsPlayerInstance = null;
             }
             if (shakaPlayerInstance) {
@@ -3482,7 +3878,7 @@
             // 1. .m3u8 -> Direct Hls.js load
             if (isAlreadyHls) {
                 console.log('Routing direct .m3u8 to Hls.js:', url);
-                loadHlsStream(url, resumeTime);
+                loadHlsStream(url, resumeTime, isRetry);
                 return;
             }
 
@@ -3490,7 +3886,7 @@
             if (isMkv || isMultiTrack || isUnsupportedAudio) {
                 const transmuxUrl = `${API_BASE}/api/hls/master.m3u8?url=${encodeURIComponent(url)}&track=${selectedAudioTrackIndex}`;
                 console.log('MKV or multi-track stream detected -> routing to HLS transmuxer:', transmuxUrl);
-                loadHlsStream(transmuxUrl, resumeTime);
+                loadHlsStream(transmuxUrl, resumeTime, isRetry);
                 return;
             }
 
@@ -3500,10 +3896,30 @@
 
             video.onerror = async (e) => {
                 console.warn('HTML5 Video Codec Error:', video.error ? video.error.code : 'unknown', 'URL:', url);
-                // Attempt on-demand HLS transmuxer before failing over
-                const hlsFallbackUrl = `${API_BASE}/api/hls/master.m3u8?url=${encodeURIComponent(url)}&track=${selectedAudioTrackIndex}`;
-                console.log('HTML5 playback error. Auto-falling back to HLS transmuxer:', hlsFallbackUrl);
-                loadHlsStream(hlsFallbackUrl, video.currentTime || resumeTime || 0);
+                if (hlsTransmuxRetryCount < 2) {
+                    hlsTransmuxRetryCount++;
+                    const hlsFallbackUrl = `${API_BASE}/api/hls/master.m3u8?url=${encodeURIComponent(url)}&track=${selectedAudioTrackIndex}`;
+                    console.log(`HTML5 playback error. Auto-falling back to HLS transmuxer (retry ${hlsTransmuxRetryCount}/2):`, hlsFallbackUrl);
+                    loadHlsStream(hlsFallbackUrl, video.currentTime || resumeTime || 0, true);
+                } else {
+                    console.warn('Playback error threshold reached. Switching to embed fallback player.');
+                    showToast("Switched to high-speed embed stream for optimal browser playback", 5000);
+                    switchPlayerMode('embed');
+                }
+            };
+
+            video.onstalled = async () => {
+                console.warn('HTML5 Video stalled on URL:', url);
+                if (!video.paused && !video.ended && video.readyState < 3) {
+                    if (hlsTransmuxRetryCount < 2) {
+                        hlsTransmuxRetryCount++;
+                        const hlsFallbackUrl = `${API_BASE}/api/hls/master.m3u8?url=${encodeURIComponent(url)}&track=${selectedAudioTrackIndex}`;
+                        loadHlsStream(hlsFallbackUrl, video.currentTime || resumeTime || 0, true);
+                    } else {
+                        showToast("Switched to high-speed embed stream for optimal browser playback", 5000);
+                        switchPlayerMode('embed');
+                    }
+                }
             };
 
             video.src = url;
@@ -3525,18 +3941,52 @@
             }
         }
 
-        function loadHlsStream(hlsUrl, resumeTime = 0) {
+        function loadHlsStream(hlsUrl, resumeTime = 0, isRetry = false) {
             const video = document.getElementById('videoElement');
             if (!video) return;
+
+            if (!isRetry) {
+                hlsTransmuxRetryCount = 0;
+            }
 
             clearPlaybackStallTimer();
 
             if (hlsPlayerInstance) {
-                hlsPlayerInstance.destroy();
+                try {
+                    hlsPlayerInstance.stopLoad();
+                    hlsPlayerInstance.detachMedia();
+                    hlsPlayerInstance.destroy();
+                } catch (e) {}
                 hlsPlayerInstance = null;
             }
 
             setupStallDetection(video);
+
+            // Set video event handlers with graceful fallback to embed
+            video.onerror = async (e) => {
+                console.warn('Video element error during HLS:', video.error ? video.error.code : 'unknown');
+                if (hlsTransmuxRetryCount < 2) {
+                    hlsTransmuxRetryCount++;
+                    console.log(`Retrying HLS after video error (${hlsTransmuxRetryCount}/2)...`);
+                    setTimeout(() => loadHlsStream(hlsUrl, resumeTime, true), 1000);
+                } else {
+                    showToast("Switched to high-speed embed stream for optimal browser playback", 5000);
+                    switchPlayerMode('embed');
+                }
+            };
+
+            video.onstalled = async () => {
+                console.warn('Video element stalled during HLS');
+                if (!video.paused && !video.ended && video.readyState < 3) {
+                    if (hlsTransmuxRetryCount < 2) {
+                        hlsTransmuxRetryCount++;
+                        setTimeout(() => loadHlsStream(hlsUrl, resumeTime, true), 1000);
+                    } else {
+                        showToast("Switched to high-speed embed stream for optimal browser playback", 5000);
+                        switchPlayerMode('embed');
+                    }
+                }
+            };
 
             if (typeof Hls !== 'undefined' && Hls.isSupported()) {
                 const hls = new Hls({
@@ -3567,18 +4017,46 @@
                         switch (data.type) {
                             case Hls.ErrorTypes.NETWORK_ERROR:
                                 console.log('HLS network error, attempting recovery...');
-                                hls.startLoad();
+                                if (hlsTransmuxRetryCount < 2) {
+                                    hlsTransmuxRetryCount++;
+                                    hls.startLoad();
+                                } else {
+                                    hls.destroy();
+                                    hlsPlayerInstance = null;
+                                    clearPlaybackStallTimer();
+                                    showToast("Switched to high-speed embed stream for optimal browser playback", 5000);
+                                    switchPlayerMode('embed');
+                                }
                                 break;
                             case Hls.ErrorTypes.MEDIA_ERROR:
                                 console.log('HLS media error, attempting recovery...');
-                                hls.recoverMediaError();
+                                if (hlsTransmuxRetryCount < 2) {
+                                    hlsTransmuxRetryCount++;
+                                    hls.recoverMediaError();
+                                } else {
+                                    hls.destroy();
+                                    hlsPlayerInstance = null;
+                                    clearPlaybackStallTimer();
+                                    showToast("Switched to high-speed embed stream for optimal browser playback", 5000);
+                                    switchPlayerMode('embed');
+                                }
                                 break;
                             default:
                                 console.warn('HLS unrecoverable fatal error:', data.details);
                                 hls.destroy();
                                 hlsPlayerInstance = null;
                                 clearPlaybackStallTimer();
-                                await fallbackToNextMirrorOrEmbed(`Stream error: ${data.details || data.type}`);
+                                if (hlsTransmuxRetryCount < 2) {
+                                    hlsTransmuxRetryCount++;
+                                    console.log(`HLS transmux error. Retrying (${hlsTransmuxRetryCount}/2)...`);
+                                    showToast(`HLS retry (${hlsTransmuxRetryCount}/2)...`, 2000);
+                                    setTimeout(() => {
+                                        loadHlsStream(hlsUrl, resumeTime, true);
+                                    }, 1000);
+                                } else {
+                                    showToast("Switched to high-speed embed stream for optimal browser playback", 5000);
+                                    switchPlayerMode('embed');
+                                }
                                 break;
                         }
                     }
@@ -3642,37 +4120,92 @@
             }
         }
 
-        async function openExternalVLC(streamUrl, startTime = 0) {
-            const target = streamUrl || currentStreamUrl || currentDirectUrl;
+        async function openExternalVLC(streamUrl, startTime = 0, mirrorUrl = '', rawUrl = '') {
+            let target = streamUrl || currentStreamUrl || currentDirectUrl;
             if (!target) {
                 showToast("⚠️ No stream selected to play.", 4000);
                 return;
             }
 
-            // Stream Verification Lock: Refuse to launch raw gateway URLs into VLC
-            // Note: Internal proxy URLs (/playback/resolve) are auto-unwrapped and resolved by backend /api/vlc/play
+            // Pre-resolve direct stream URL via /api/resolve-url
+            let directUrl = target;
             const isInternalProxy = target.includes('/playback/resolve');
-            const isGateway = /greenmotors|hdstream4u|driveseed|unblockedgames|thenaukriadda|video-seed|video-gen|homelander/i.test(target);
             const isDirectMedia = /\.mkv|\.mp4|\.m3u8|\.webm|r2\.cloudflarestorage|pixeldrain|workers\.dev/i.test(target);
-            if (!isInternalProxy && isGateway && !isDirectMedia) {
-                showToast(`⚠️ Stream Verification Lock: Gateway URL must be resolved to direct media before launching VLC.`, 5000);
-                return;
+            if (!isInternalProxy && !isDirectMedia) {
+                showToast("🔍 Resolving direct stream...", 2000);
+                try {
+                    const res = await fetch(`${API_BASE}/api/resolve-url?url=${encodeURIComponent(target)}`);
+                    if (res.ok) {
+                        const data = await res.json();
+                        if (data.direct_url) {
+                            directUrl = data.direct_url;
+                        }
+                    }
+                } catch (e) {
+                    console.warn("Resolve URL fallback notice:", e);
+                }
             }
 
             const title = currentMediaTitle || 'PLAYRO Stream';
+            let accelUrl = `${API_BASE}/api/stream/accelerated?url=${encodeURIComponent(directUrl)}`;
+            const rawParam = rawUrl || (typeof currentRawUrl !== 'undefined' ? currentRawUrl : '');
+            if (rawParam && rawParam !== directUrl && !accelUrl.includes('raw_url=')) {
+                accelUrl += `&raw_url=${encodeURIComponent(rawParam)}`;
+            }
+            const mirrorParam = mirrorUrl || (typeof currentMirrorUrl !== 'undefined' ? currentMirrorUrl : '');
+            if (mirrorParam && !accelUrl.includes('mirror=')) {
+                accelUrl += `&mirror=${encodeURIComponent(mirrorParam)}`;
+            }
 
-            // 1. Android TV / Phone: Dispatch Android VLC Intent
-            const isAndroid = /Android/i.test(navigator.userAgent);
+            if (window.AndroidTVBridge) {
+                if (typeof window.AndroidTVBridge.openVlc === 'function') {
+                    showToast("▲ Launching in VLC Player...", 3000);
+                    window.AndroidTVBridge.openVlc(accelUrl);
+                    return;
+                } else if (typeof window.AndroidTVBridge.openExternalPlayer === 'function') {
+                    showToast("▲ Launching in External Player...", 3000);
+                    window.AndroidTVBridge.openExternalPlayer(accelUrl, "video/*");
+                    return;
+                }
+            }
+
+            const cleanUrl = accelUrl.replace(/^https?:\/\//i, '');
+            const proto = accelUrl.startsWith('https') ? 'https' : 'http';
+
+            const ua = navigator.userAgent || '';
+            const isAndroid = /Android/i.test(ua);
+            const isIOS = /iPhone|iPad|iPod/i.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(accelUrl).catch(() => {});
+            }
+
+            // 2. Android TV / Phone: Dispatch standard Android Intent with VLC fallback
             if (isAndroid) {
-                const fullUrl = target.startsWith('http') ? target : (window.location.origin + target);
-                window.location.href = `intent:${fullUrl}#Intent;action=android.intent.action.VIEW;type=video/*;package=org.videolan.vlc;end`;
+                showToast("▲ Launching in Android Media Player (VLC/MX/JustPlayer/CX)...", 3000);
+                const androidIntent = `intent://${cleanUrl}#Intent;scheme=${proto};action=android.intent.action.VIEW;type=video/*;end`;
+                try {
+                    window.location.href = androidIntent;
+                    setTimeout(() => {
+                        window.location.href = `vlc://${accelUrl}`;
+                    }, 1200);
+                } catch (err) {
+                    window.location.href = `vlc://${accelUrl}`;
+                }
                 return;
             }
 
-            // 2. Desktop PC (Windows / Mac / Linux): Launch VLC directly via local companion endpoint with resume timestamp
+            // 2. iOS: Dispatch VLC x-callback-url
+            if (isIOS) {
+                showToast("▲ Launching in iOS VLC...", 3000);
+                window.location.href = `vlc-x-callback://x-callback-url/stream?url=${encodeURIComponent(accelUrl)}`;
+                return;
+            }
+
+            // 3. Desktop PC (Windows / Mac / Linux): Launch VLC directly via local companion endpoint with resume timestamp
             try {
                 const startParam = startTime && startTime > 0 ? `&start_time=${Math.floor(startTime)}` : '';
-                const res = await fetch(`${API_BASE}/api/vlc/play?url=${encodeURIComponent(target)}&title=${encodeURIComponent(title)}${startParam}`);
+                const res = await fetch(`${API_BASE}/api/vlc/play?url=${encodeURIComponent(directUrl)}&title=${encodeURIComponent(title)}&accelerate=true${startParam}`);
                 const data = await res.json();
                 if (data.status === 'SUCCESS') {
                     console.log("✅ VLC launched via backend API:", data);
@@ -3690,7 +4223,7 @@
                     window._vlcPollInterval = setInterval(async () => {
                         pollAttempts++;
                         try {
-                            const pollRes = await fetch(`${API_BASE}/api/vlc/play?url=${encodeURIComponent(target)}&title=${encodeURIComponent(title)}${startParam}&poll=true`);
+                            const pollRes = await fetch(`${API_BASE}/api/vlc/play?url=${encodeURIComponent(target)}&title=${encodeURIComponent(title)}&accelerate=true${startParam}&poll=true`);
                             const pollData = await pollRes.json();
                             if (pollData.status === 'SUCCESS') {
                                 clearInterval(window._vlcPollInterval);
@@ -3740,6 +4273,140 @@
             }
         }
 
+        function openExternalCX(streamUrl, mirrorUrl = '', rawUrl = '') {
+            const target = streamUrl || currentStreamUrl || currentDirectUrl;
+            if (!target) {
+                showToast("⚠️ No stream selected to play.", 4000);
+                return;
+            }
+
+            const directUrl = target.startsWith('http') ? target : (window.location.origin + (target.startsWith('/') ? target : '/' + target));
+            let accelUrl = directUrl.includes('/api/stream/accelerated') ? directUrl : `${API_BASE}/api/stream/accelerated?url=${encodeURIComponent(directUrl)}`;
+            const rawParam = rawUrl || (typeof currentRawUrl !== 'undefined' ? currentRawUrl : '');
+            if (rawParam && !accelUrl.includes('raw_url=')) {
+                accelUrl += `&raw_url=${encodeURIComponent(rawParam)}`;
+            }
+            const mirrorParam = mirrorUrl || (typeof currentMirrorUrl !== 'undefined' ? currentMirrorUrl : '');
+            if (mirrorParam && !accelUrl.includes('mirror=')) {
+                accelUrl += `&mirror=${encodeURIComponent(mirrorParam)}`;
+            }
+
+            // Priority: Native Android TV / Mobile Bridge
+            if (window.AndroidTVBridge && typeof window.AndroidTVBridge.openPackagePlayer === 'function') {
+                showToast("📁 Launching in CX File Explorer...", 3000);
+                window.AndroidTVBridge.openPackagePlayer(accelUrl, "com.cxinventor.file.explorer", "video/*");
+                return;
+            }
+
+            const cleanUrl = accelUrl.replace(/^https?:\/\//i, '');
+            const proto = accelUrl.startsWith('https') ? 'https' : 'http';
+            const cxIntent = `intent://${cleanUrl}#Intent;scheme=${proto};action=android.intent.action.VIEW;package=com.cxinventor.file.explorer;type=video/*;end`;
+
+            showToast("📁 Launching in CX File Explorer...");
+
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(accelUrl).catch(() => {});
+            }
+
+            window.location.href = cxIntent;
+        }
+
+        function openExternal1DM(streamUrl) {
+            const target = streamUrl || currentStreamUrl || currentDirectUrl;
+            if (!target) {
+                showToast("⚠️ No stream selected to play.", 4000);
+                return;
+            }
+
+            const fullUrl = target.startsWith('http') ? target : (window.location.origin + (target.startsWith('/') ? target : '/' + target));
+
+            // Priority: Native Android TV / Mobile Bridge
+            if (window.AndroidTVBridge && typeof window.AndroidTVBridge.openPackagePlayer === 'function') {
+                showToast("📥 Launching in 1DM...", 3000);
+                window.AndroidTVBridge.openPackagePlayer(fullUrl, "idm.internet.download.manager", "video/*");
+                return;
+            }
+
+            const cleanUrl = fullUrl.replace(/^https?:\/\//i, '');
+            const plusIntent = `intent://${cleanUrl}#Intent;action=android.intent.action.VIEW;package=idm.internet.download.manager.plus;type=video/*;end`;
+            const freeIntent = `intent://${cleanUrl}#Intent;action=android.intent.action.VIEW;package=idm.internet.download.manager;type=video/*;end`;
+
+            showToast("📥 Launching in 1DM...");
+
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(fullUrl).catch(() => {});
+            }
+
+            let appOpened = false;
+            const onVisibilityChange = () => {
+                if (document.hidden) appOpened = true;
+            };
+            window.addEventListener('visibilitychange', onVisibilityChange, { once: true });
+            window.addEventListener('pagehide', onVisibilityChange, { once: true });
+
+            // Attempt 1DM+ first
+            window.location.href = plusIntent;
+
+            // Fallback to standard 1DM if 1DM+ package is not installed
+            setTimeout(() => {
+                window.removeEventListener('visibilitychange', onVisibilityChange);
+                window.removeEventListener('pagehide', onVisibilityChange);
+                if (!appOpened && !document.hidden) {
+                    window.location.href = freeIntent;
+                }
+            }, 1000);
+        }
+
+        async function playSwarmStream(releaseIndex, streamUrl, rawTarget, title, badge, posterUrl = '') {
+            currentPlayerMode = 'swarm';
+            updateEngineToggleUI('swarm');
+            showToast("🚀 Launching with Accelerated 1DM Swarm Engine (Multi-Socket 4K)...");
+            await handlePlayClick(releaseIndex, streamUrl, rawTarget, title, badge, posterUrl);
+        }
+
+        async function playBingrHLSStream(releaseIndex, streamUrl, rawTarget, title, badge, posterUrl = '') {
+            currentPlayerMode = 'bingr_hls';
+            updateEngineToggleUI('bingr_hls');
+            showToast("🌊 Launching with Bingr Dynamic HLS Transmuxer (RFC 8216 Smooth 4K)...");
+            await handlePlayClick(releaseIndex, streamUrl, rawTarget, title, badge, posterUrl);
+        }
+
+        function handleExternalPlayerChoice(choice, streamUrl) {
+            const target = streamUrl || currentDirectUrl || currentStreamUrl;
+            if (choice === 'vlc') {
+                openExternalVLC(target);
+            } else if (choice === 'cx') {
+                openExternalCX(target);
+            } else if (choice === '1dm') {
+                openExternal1DM(target);
+            } else if (choice === 'swarm') {
+                switchPlayerMode('swarm');
+            } else if (choice === 'bingr_hls') {
+                switchPlayerMode('bingr_hls');
+            }
+        }
+
+        function handleExternalBatchPlayer(choice) {
+            if (!currentDetailReleases || currentDetailReleases.length === 0) {
+                showToast("⚠️ No direct releases available to play.", 4000);
+                return;
+            }
+            const topRelease = currentDetailReleases[0];
+            const rawTarget = topRelease.target_url || topRelease.direct_url || '';
+            const safeStreamUrl = rawTarget ? `${API_BASE}/playback/resolve?url=${encodeURIComponent(rawTarget)}&title=${encodeURIComponent(currentDetailLabelTitle || 'PLAYRO Stream')}` : '';
+
+            if (choice === 'swarm') {
+                playSwarmStream(0, safeStreamUrl, rawTarget, currentDetailLabelTitle, topRelease.resolution || '4K', currentDetailPosterUrl);
+                return;
+            }
+            if (choice === 'bingr_hls') {
+                playBingrHLSStream(0, safeStreamUrl, rawTarget, currentDetailLabelTitle, topRelease.resolution || '4K', currentDetailPosterUrl);
+                return;
+            }
+            if (!safeStreamUrl) return;
+            handleExternalPlayerChoice(choice, safeStreamUrl);
+        }
+
         function toggleVlcMode() {
             vlcModeEnabled = !vlcModeEnabled;
             localStorage.setItem('playro_vlc_mode', vlcModeEnabled);
@@ -3748,13 +4415,24 @@
 
         function updateVlcButtonUI() {
             const label = document.getElementById('vlcStateLabel');
-            if (!label) return;
-            if (vlcModeEnabled) {
-                label.innerText = 'ON';
-                label.className = 'font-mono text-emerald-400 font-bold';
-            } else {
-                label.innerText = 'OFF';
-                label.className = 'font-mono text-zinc-400 font-semibold';
+            const mobileLabel = document.getElementById('mobileVlcStateLabel');
+            if (label) {
+                if (vlcModeEnabled) {
+                    label.innerText = 'ON';
+                    label.className = 'font-mono text-emerald-400 font-bold';
+                } else {
+                    label.innerText = 'OFF';
+                    label.className = 'font-mono text-zinc-400 font-semibold';
+                }
+            }
+            if (mobileLabel) {
+                if (vlcModeEnabled) {
+                    mobileLabel.innerText = 'ON';
+                    mobileLabel.className = 'font-mono text-emerald-400 font-bold text-[10px]';
+                } else {
+                    mobileLabel.innerText = 'OFF';
+                    mobileLabel.className = 'font-mono text-zinc-400 font-semibold text-[10px]';
+                }
             }
         }
 
@@ -4353,6 +5031,35 @@
                     }
                 }
             });
+        }
+    </script>
+
+    <!-- 10-foot TV Voice HUD Modal -->
+    <div id="tvVoiceModal" class="hidden fixed inset-0 z-[9999] flex flex-col items-center justify-center bg-black/85 backdrop-blur-md">
+      <div class="relative flex items-center justify-center w-32 h-32 mb-6">
+        <div class="absolute inset-0 rounded-full bg-cyan-500/20 animate-ping"></div>
+        <div class="absolute inset-2 rounded-full bg-cyan-500/30 animate-pulse"></div>
+        <div class="relative flex items-center justify-center w-20 h-20 rounded-full bg-cyan-500 text-black shadow-lg shadow-cyan-500/50">
+          <svg class="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/></svg>
+        </div>
+      </div>
+      <h2 id="tvVoiceStatus" class="text-2xl font-bold text-white mb-2">Listening...</h2>
+      <p id="tvVoiceTranscript" class="text-lg text-cyan-400 font-medium max-w-lg text-center px-4 min-h-[2rem]">Speak a movie, series, or anime title...</p>
+      <button id="tvVoiceCancelBtn" class="mt-8 px-6 py-2.5 rounded-full bg-white/10 hover:bg-white/20 text-white font-medium focus:ring-2 focus:ring-cyan-400 focus:outline-none transition-all">Cancel (Back)</button>
+    </div>
+
+    <!-- TV Navigation & Remote Controller -->
+    <script src="/static/tv_controller.js"></script>
+    <script>
+        // Fallback for triggerTVVoiceSearch if not defined by tv_controller.js
+        if (typeof window.triggerTVVoiceSearch !== 'function') {
+            window.triggerTVVoiceSearch = function() {
+                if (typeof window.tvVoiceSearch === 'function') {
+                    window.tvVoiceSearch();
+                } else if (typeof toggleVoiceSearch === 'function') {
+                    toggleVoiceSearch();
+                }
+            };
         }
     </script>
 </body>

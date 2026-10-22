@@ -1598,7 +1598,7 @@ class FastScrapers:
             encoded_query = urllib.parse.quote(q_str)
             url = f"{mirror}/?f=0&c=0_0&q={encoded_query}"
             try:
-                resp = await client.get(url, headers=DEFAULT_HEADERS, timeout=6.0, follow_redirects=True)
+                resp = await client.get(url, headers=DEFAULT_HEADERS, timeout=8.0, follow_redirects=True)
                 if resp.status_code == 200:
                     await self.domain_resolver.report_success("nyaa")
                     soup = BeautifulSoup(resp.text, "lxml")

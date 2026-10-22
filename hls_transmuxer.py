@@ -21,15 +21,74 @@ import time
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 try:
-    from audio_probe import find_ffmpeg, parse_audio_streams, probe_audio_streams
+    from fastapi import HTTPException
+except ImportError:
+    class HTTPException(Exception):  # type: ignore
+        def __init__(self, status_code: int = 502, detail: str = ""):
+            super().__init__(detail)
+            self.status_code = status_code
+            self.detail = detail
+
+try:
+    from audio_probe import find_ffmpeg, find_ffprobe, parse_audio_streams, probe_audio_streams
 except ImportError:
     try:
-        from .audio_probe import find_ffmpeg, parse_audio_streams, probe_audio_streams
+        from .audio_probe import find_ffmpeg, find_ffprobe, parse_audio_streams, probe_audio_streams
     except ImportError:
+        KNOWN_FFMPEG_PATHS: List[str] = [
+            r"C:\Program Files (x86)\XDM\ffmpeg.exe",
+            r"C:\Program Files\Softdeluxe\Free Download Manager\ffmpeg.exe",
+            r"C:\ffmpeg\bin\ffmpeg.exe",
+            r"C:\ProgramData\chocolatey\bin\ffmpeg.exe",
+            r"C:\Users\sahil\AppData\Local\Microsoft\WinGet\Links\ffmpeg.exe",
+            r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
+            r"C:\Program Files (x86)\ffmpeg\bin\ffmpeg.exe",
+            os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Links\ffmpeg.exe"),
+            os.path.expandvars(r"%USERPROFILE%\AppData\Local\CapCut\Apps\2.3.0.569\ffmpeg.exe"),
+            "/usr/bin/ffmpeg",
+            "/usr/local/bin/ffmpeg",
+            "/opt/homebrew/bin/ffmpeg",
+        ]
+
+        KNOWN_FFPROBE_PATHS: List[str] = [
+            r"C:\Program Files (x86)\XDM\ffprobe.exe",
+            r"C:\Program Files\Softdeluxe\Free Download Manager\ffprobe.exe",
+            r"C:\ffmpeg\bin\ffprobe.exe",
+            r"C:\ProgramData\chocolatey\bin\ffprobe.exe",
+            r"C:\Users\sahil\AppData\Local\Microsoft\WinGet\Links\ffprobe.exe",
+            r"C:\Program Files\ffmpeg\bin\ffprobe.exe",
+            r"C:\Program Files (x86)\ffmpeg\bin\ffprobe.exe",
+            os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Links\ffprobe.exe"),
+            os.path.expandvars(r"%USERPROFILE%\AppData\Local\CapCut\Apps\2.3.0.569\ffprobe.exe"),
+            "/usr/bin/ffprobe",
+            "/usr/local/bin/ffprobe",
+            "/opt/homebrew/bin/ffprobe",
+        ]
+
         def find_ffmpeg() -> str:
             """Fallback FFmpeg path locator."""
             which_path = shutil.which("ffmpeg")
-            return which_path if which_path else "ffmpeg"
+            if which_path and os.path.isfile(which_path):
+                return os.path.abspath(which_path)
+            for candidate in KNOWN_FFMPEG_PATHS:
+                if candidate and os.path.isfile(candidate):
+                    return os.path.abspath(candidate)
+            return "ffmpeg"
+
+        def find_ffprobe() -> str:
+            """Fallback ffprobe path locator."""
+            which_path = shutil.which("ffprobe")
+            if which_path and os.path.isfile(which_path):
+                return os.path.abspath(which_path)
+            for candidate in KNOWN_FFPROBE_PATHS:
+                if candidate and os.path.isfile(candidate):
+                    return os.path.abspath(candidate)
+            ffmpeg_bin = find_ffmpeg()
+            if ffmpeg_bin and ffmpeg_bin != "ffmpeg":
+                sibling = os.path.join(os.path.dirname(ffmpeg_bin), "ffprobe.exe" if os.name == "nt" else "ffprobe")
+                if os.path.isfile(sibling):
+                    return os.path.abspath(sibling)
+            return "ffprobe"
 
         def parse_audio_streams(probe_text: str, url: str = "") -> Dict[str, Any]:
             """Fallback empty audio parser."""
@@ -242,10 +301,45 @@ class HLSSession:
         self.last_accessed: float = last_accessed if last_accessed is not None else now
         self.cache: HLSSegmentCache = cache if cache is not None else HLS_SEGMENT_CACHE
         self._inflight: Dict[str, asyncio.Task] = {}
+        self.health: str = "healthy"
+        self.status: str = "healthy"
+        self.last_error: Optional[str] = None
+        self.failed_segments: List[int] = []
 
         # Auto-inspect stream duration and audio tracks if duration is missing
         if self.duration <= 0.0 and self.media_url:
             self.inspect_media()
+
+    def get_status(self) -> Dict[str, Any]:
+        """Returns active HLS session telemetry, health status, and failure tracking."""
+        total_segments = max(1, math.ceil(self.duration / self.segment_duration))
+        cached_count = 0
+        if hasattr(self.cache, "_cache"):
+            with getattr(self.cache, "_lock", threading.RLock()):
+                prefix_col = f"{self.session_id}:"
+                prefix_und = f"{self.session_id}_"
+                cached_count = sum(
+                    1 for k in self.cache._cache
+                    if k.startswith(prefix_col) or k.startswith(prefix_und)
+                )
+        codecs = ["aac"] if self.is_audio_aac else ["copy"]
+        return {
+            "session_id": self.session_id,
+            "health": self.health,
+            "status": self.status,
+            "duration": self.duration,
+            "audio_track": self.audio_track,
+            "volume_boost": self.volume_boost,
+            "segment_count": total_segments,
+            "segment_duration": self.segment_duration,
+            "is_audio_aac": self.is_audio_aac,
+            "cached_segments": cached_count,
+            "codecs": codecs,
+            "last_error": self.last_error,
+            "failed_segments": list(self.failed_segments),
+            "created_at": self.created_at,
+            "last_accessed": self.last_accessed,
+        }
 
     def inspect_media(self) -> Dict[str, Any]:
         """Inspects duration and audio tracks using audio_probe.py (find_ffmpeg and parse_audio_streams)."""
@@ -406,6 +500,19 @@ class HLSSession:
             if data:
                 self.cache.put(cache_key, data)
                 self.cache.put(legacy_key, data)
+            else:
+                warn_msg = f"FFmpeg returned empty or invalid segment data for segment {idx} (session {self.session_id})"
+                logger.warning(warn_msg)
+                self.health = "degraded"
+                self.status = "degraded"
+                if idx not in self.failed_segments:
+                    self.failed_segments.append(idx)
+                if not self.last_error:
+                    self.last_error = warn_msg
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"FFmpeg failed or returned empty bytes for segment {idx}; client buffer protected."
+                )
         finally:
             self._inflight.pop(cache_key, None)
 
@@ -547,27 +654,54 @@ class HLSSession:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=45.0)
             if proc.returncode != 0:
                 err_msg = stderr.decode("utf-8", errors="replace").strip()
-                logger.error(
+                logger.warning(
                     "FFmpeg slice failed for segment %d (exit code %d): %s",
                     segment_idx,
                     proc.returncode,
                     err_msg,
                 )
+                self.health = "degraded"
+                self.status = "degraded"
+                self.last_error = f"FFmpeg exit code {proc.returncode}: {err_msg}"
+                if segment_idx not in self.failed_segments:
+                    self.failed_segments.append(segment_idx)
                 return stdout or b""
+            if not stdout:
+                logger.warning(
+                    "FFmpeg slice returned empty bytes for segment %d of session %s",
+                    segment_idx,
+                    self.session_id,
+                )
+                self.health = "degraded"
+                self.status = "degraded"
+                self.last_error = f"FFmpeg returned empty bytes for segment {segment_idx}"
+                if segment_idx not in self.failed_segments:
+                    self.failed_segments.append(segment_idx)
+                return b""
             return stdout
         except asyncio.TimeoutError:
-            logger.error(
+            logger.warning(
                 "FFmpeg slice segment %d timed out for session %s",
                 segment_idx,
                 self.session_id,
             )
+            self.health = "degraded"
+            self.status = "degraded"
+            self.last_error = f"FFmpeg slice segment {segment_idx} timed out"
+            if segment_idx not in self.failed_segments:
+                self.failed_segments.append(segment_idx)
             try:
                 proc.kill()
             except Exception:
                 pass
             return b""
         except Exception as e:
-            logger.error("FFmpeg slice segment %d failed: %s", segment_idx, e)
+            logger.warning("FFmpeg slice segment %d failed for session %s: %s", segment_idx, self.session_id, e)
+            self.health = "degraded"
+            self.status = "degraded"
+            self.last_error = str(e)
+            if segment_idx not in self.failed_segments:
+                self.failed_segments.append(segment_idx)
             return b""
 
 

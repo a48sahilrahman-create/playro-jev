@@ -1,15 +1,48 @@
 {
+  "id": "/",
   "name": "PLAYRO Universal OTT",
   "short_name": "PLAYRO",
+  "description": "Cross-platform high-speed streaming platform for Windows, Android, Google TV, and Smart TVs",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "display_override": [
+    "standalone",
+    "fullscreen"
+  ],
+  "orientation": "landscape",
+  "categories": [
+    "entertainment",
+    "multimedia",
+    "movies"
+  ],
   "background_color": "#09090b",
   "theme_color": "#09090b",
+  "prefer_related_applications": false,
   "icons": [
     {
       "src": "https://image.tmdb.org/t/p/w192/1hRoyzDtpgMU7Dz4JHVhGnYNs.jpg",
       "sizes": "192x192",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "https://image.tmdb.org/t/p/w192/1hRoyzDtpgMU7Dz4JHVhGnYNs.jpg",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "https://image.tmdb.org/t/p/w500/1hRoyzDtpgMU7Dz4JHVhGnYNs.jpg",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "https://image.tmdb.org/t/p/w500/1hRoyzDtpgMU7Dz4JHVhGnYNs.jpg",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ]
 }

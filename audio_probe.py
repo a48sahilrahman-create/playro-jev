@@ -18,14 +18,32 @@ logger = logging.getLogger("audio_probe")
 KNOWN_FFMPEG_PATHS: List[str] = [
     r"C:\Program Files (x86)\XDM\ffmpeg.exe",
     r"C:\Program Files\Softdeluxe\Free Download Manager\ffmpeg.exe",
+    r"C:\ffmpeg\bin\ffmpeg.exe",
+    r"C:\ProgramData\chocolatey\bin\ffmpeg.exe",
+    r"C:\Users\sahil\AppData\Local\Microsoft\WinGet\Links\ffmpeg.exe",
     r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
     r"C:\Program Files (x86)\ffmpeg\bin\ffmpeg.exe",
-    r"C:\ffmpeg\bin\ffmpeg.exe",
     os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Links\ffmpeg.exe"),
     os.path.expandvars(r"%USERPROFILE%\AppData\Local\CapCut\Apps\2.3.0.569\ffmpeg.exe"),
     "/usr/bin/ffmpeg",
     "/usr/local/bin/ffmpeg",
     "/opt/homebrew/bin/ffmpeg",
+]
+
+# Well-known ffprobe search paths on Windows and Unix systems
+KNOWN_FFPROBE_PATHS: List[str] = [
+    r"C:\Program Files (x86)\XDM\ffprobe.exe",
+    r"C:\Program Files\Softdeluxe\Free Download Manager\ffprobe.exe",
+    r"C:\ffmpeg\bin\ffprobe.exe",
+    r"C:\ProgramData\chocolatey\bin\ffprobe.exe",
+    r"C:\Users\sahil\AppData\Local\Microsoft\WinGet\Links\ffprobe.exe",
+    r"C:\Program Files\ffmpeg\bin\ffprobe.exe",
+    r"C:\Program Files (x86)\ffmpeg\bin\ffprobe.exe",
+    os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Links\ffprobe.exe"),
+    os.path.expandvars(r"%USERPROFILE%\AppData\Local\CapCut\Apps\2.3.0.569\ffprobe.exe"),
+    "/usr/bin/ffprobe",
+    "/usr/local/bin/ffprobe",
+    "/opt/homebrew/bin/ffprobe",
 ]
 
 # Audio codecs natively supported by standard HTML5 browsers (Chrome, Firefox, Safari, Edge)
@@ -55,6 +73,29 @@ def find_ffmpeg() -> str:
             return os.path.abspath(candidate)
 
     return "ffmpeg"
+
+
+def find_ffprobe() -> str:
+    """Locates the ffprobe executable on the host system.
+
+    Checks system PATH first, then well-known installation paths,
+    falling back to sibling directory of find_ffmpeg() or 'ffprobe'.
+    """
+    which_path = shutil.which("ffprobe")
+    if which_path and os.path.isfile(which_path):
+        return os.path.abspath(which_path)
+
+    for candidate in KNOWN_FFPROBE_PATHS:
+        if candidate and os.path.isfile(candidate):
+            return os.path.abspath(candidate)
+
+    ffmpeg_bin = find_ffmpeg()
+    if ffmpeg_bin and ffmpeg_bin != "ffmpeg":
+        sibling = os.path.join(os.path.dirname(ffmpeg_bin), "ffprobe.exe" if os.name == "nt" else "ffprobe")
+        if os.path.isfile(sibling):
+            return os.path.abspath(sibling)
+
+    return "ffprobe"
 
 
 def parse_audio_streams(probe_text: str, url: str = "") -> Dict[str, Any]:

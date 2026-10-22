@@ -54,6 +54,13 @@ except ImportError:
     except ImportError:
         HAS_PATCHRIGHT = False
 
+try:
+    import sys
+    sys.path.append(r"C:\Users\sahil\workspaces\bulletproof_streaming_engine\src")
+    from speed_gated_resolver import SpeedGatedResolver
+except ImportError:
+    SpeedGatedResolver = None
+
 logger = logging.getLogger("link_resolver")
 
 DEFAULT_HEADERS = {
@@ -508,6 +515,55 @@ class LinkResolver:
     def __init__(self):
         self.limits = httpx.Limits(max_keepalive_connections=40, max_connections=80)
         self.auth_bridge = InteractiveAuthBridge()
+        self.speed_resolver = SpeedGatedResolver() if SpeedGatedResolver else None
+
+    async def probe_socket_speed(
+        self,
+        client: httpx.AsyncClient,
+        stream_url: str,
+        required_mbps: float = 15.0
+    ) -> Dict[str, Any]:
+        """
+        Physical 1MB socket probe enforcing throughput gate.
+        Uses SpeedGatedResolver if available, else standalone socket probe fallback.
+        """
+        if self.speed_resolver:
+            return await self.speed_resolver.probe_socket_speed(client, stream_url, required_mbps=required_mbps)
+
+        req_headers = {**DEFAULT_HEADERS, "Range": "bytes=10485760-11534335"}
+        t0 = time.perf_counter()
+        bytes_recv = 0
+        try:
+            async with client.stream("GET", stream_url, headers=req_headers, follow_redirects=True, timeout=5.0) as resp:
+                if resp.status_code not in (200, 206):
+                    req_headers["Range"] = "bytes=0-1048575"
+                    t0 = time.perf_counter()
+                    bytes_recv = 0
+                    async with client.stream("GET", stream_url, headers=req_headers, follow_redirects=True, timeout=5.0) as resp2:
+                        if resp2.status_code not in (200, 206):
+                            return {"pass": False, "speed_mbps": 0.0, "bytes": 0, "error": f"HTTP {resp2.status_code}"}
+                        async for chunk in resp2.aiter_bytes():
+                            bytes_recv += len(chunk)
+                            if bytes_recv >= 1048576:
+                                break
+                else:
+                    async for chunk in resp.aiter_bytes():
+                        bytes_recv += len(chunk)
+                        if bytes_recv >= 1048576:
+                            break
+
+            elapsed = max(time.perf_counter() - t0, 0.001)
+            mbps = (bytes_recv * 8) / (elapsed * 1_000_000)
+            is_pass = mbps >= required_mbps and bytes_recv > 0
+            return {
+                "pass": is_pass,
+                "speed_mbps": round(mbps, 2),
+                "bytes": bytes_recv,
+                "elapsed_s": round(elapsed, 3),
+                "error": None if is_pass else f"Speed {mbps:.2f} Mbps < required {required_mbps:.2f} Mbps"
+            }
+        except Exception as e:
+            return {"pass": False, "speed_mbps": 0.0, "bytes": 0, "error": str(e)}
 
     # -------------------------------------------------------------
     # 0. SSRF-Safe Secure Request Dispatcher
@@ -774,29 +830,51 @@ class LinkResolver:
                 seen.add(full_href)
                 candidates.append({"type": "dynamic_button", "url": full_href, "label": txt or "Mirror Option"})
 
-        # Prioritize zero-login high-speed CDNs (R2 > Fast CDN Mirrors > Pixeldrain > Workers > Google CDN)
+        # Prioritize range-capable CDNs and mirrors for 1DM parallel swarm streaming:
+        # Rank 1: Cloudflare Workers (score: 100 - full RFC 7233 Range support, multi-socket swarm)
+        # Rank 2: Fast File Hosts Pixeldrain/FastDL/Buzz Server (score: 95)
+        # Rank 3: Cloudflare R2 (score: 90)
+        # Rank 4: Google Usercontent CDN (score: 70 - sequential-only fallback)
         for c in candidates:
             c_url = c.get("url", "")
             cand_text = f"{c_url} {c.get('label', '')}".lower()
-            if "r2.cloudflarestorage.com" in c_url or ".r2.dev" in c_url:
+            host = urllib.parse.urlparse(c_url).netloc.lower()
+            if "workers.dev" in cand_text or "/zfile/" in cand_text or "worker" in cand_text:
+                c["score"] = 100
+            elif (
+                "pixeldrain.com" in cand_text
+                or "pixeldrain" in cand_text
+                or "fuckingfast.net" in cand_text
+                or "fast-dl" in cand_text
+                or "fastdl" in cand_text
+                or "buzz" in cand_text
+                or "pixel." in host
+                or "cryptonewz" in cand_text
+                or any(k in cand_text for k in ["pixel.hubcloud", "cryptonewz", "mirror", "fast server"])
+            ) and not (
+                "r2.cloudflarestorage.com" in cand_text
+                or ".r2.dev" in cand_text
+                or "r2" in cand_text
+                or "fsl" in cand_text
+                or "10gbps" in cand_text
+                or "google" in cand_text
+                or "gpdl." in host
+            ):
                 c["score"] = 95
-            elif any(k in cand_text for k in ["pixel.hubcloud.", "pixel.hubcloud", "cryptonewz.", "cryptonewz", "10gbps", "server", "mirror"]):
-                c["score"] = 92
-            elif "pixeldrain" in c_url:
+            elif "r2.dev" in cand_text or "r2" in cand_text or "r2.cloudflarestorage.com" in cand_text or "fsl" in cand_text:
                 c["score"] = 90
-            elif "workers.dev" in c_url:
-                c["score"] = 88
-            elif "video-downloads.googleusercontent.com" in c_url:
-                c["score"] = 85
-            elif any(k in c_url for k in ["video-gen", "video-seed", "video-plex"]):
-                c["score"] = 80
-            elif "/zfile/" in c_url:
-                c["score"] = 75
-            elif "drive.usercontent.google.com" in c_url and "confirm=" in c_url:
+            elif (
+                "video-downloads.googleusercontent.com" in cand_text
+                or "drive.usercontent.google.com" in cand_text
+                or "10gbps" in cand_text
+                or "gpdl." in host
+            ):
                 c["score"] = 70
-            elif any(ext in c_url.lower() for ext in [".mkv", ".mp4"]):
+            elif any(k in c_url for k in ["video-gen", "video-seed", "video-plex"]):
                 c["score"] = 65
-            elif "drive.google.com" in c_url:
+            elif any(ext in c_url.lower() for ext in [".mkv", ".mp4"]):
+                c["score"] = 60
+            elif "drive.google.com" in cand_text or c.get("type") == "google_drive":
                 c["score"] = 50
             else:
                 c["score"] = 40
@@ -840,9 +918,10 @@ class LinkResolver:
                         or resp_text.startswith('{"')
                     ):
                         elapsed = round((time.perf_counter() - t0) * 1000, 2)
+                        is_quota = probe_resp.status_code in (403, 500) or "quota" in resp_lower
                         return {
-                            "status": "QUOTA_EXCEEDED" if (probe_resp.status_code in (403, 500) or "quota" in resp_lower) else "FAILED",
-                            "error": f"Upstream error {probe_resp.status_code} or quota exceeded on {host_label}",
+                            "status": "QUOTA_EXCEEDED" if is_quota else "FAILED",
+                            "error": "Google Drive quota exceeded on Cloudflare Worker" if is_quota else f"Upstream error {probe_resp.status_code} on {host_label}",
                             "direct_url": url,
                             "elapsed_ms": elapsed
                         }
@@ -934,6 +1013,17 @@ class LinkResolver:
                     resp_url_str = str(r.url)
                     resp_text = r.text
 
+                # Check sub-candidates in resp_text first for workers.dev or range mirrors
+                sub_cands = await self.harvest_all_options(client, resp_url_str, html=resp_text)
+                for sc in sub_cands:
+                    if sc.get("type") in ["worker_direct", "r2_direct", "pixeldrain"]:
+                        return {
+                            "status": "SUCCESS",
+                            "host": sc.get("label", "Direct CDN"),
+                            "direct_url": sc.get("url"),
+                            "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
+                        }
+
                 # Check query parameter ?url= (used by video-seed.dev redirects)
                 parsed_u = urllib.parse.urlparse(resp_url_str)
                 qs = urllib.parse.parse_qs(parsed_u.query)
@@ -957,17 +1047,6 @@ class LinkResolver:
                             "status": "SUCCESS",
                             "host": "Google CDN",
                             "direct_url": direct,
-                            "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
-                        }
-
-                # Check sub-candidates in resp_text
-                sub_cands = await self.harvest_all_options(client, resp_url_str, html=resp_text)
-                for sc in sub_cands:
-                    if sc.get("type") in ["worker_direct", "r2_direct", "pixeldrain"]:
-                        return {
-                            "status": "SUCCESS",
-                            "host": sc.get("label", "Direct CDN"),
-                            "direct_url": sc.get("url"),
                             "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
                         }
 
@@ -1011,18 +1090,18 @@ class LinkResolver:
                                     "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
                                 }
 
-                # 2. Check resp_url_str or r.text for direct CDN URLs (Google CDN, Pixeldrain API, CryptoNewz)
+                # 2. Check resp_url_str or r.text for direct CDN URLs (Workers, Pixeldrain API, R2, CryptoNewz, Google CDN)
                 combined_content = f"{resp_url_str} {r.text}"
 
-                # Google CDN check
-                g_match = re.search(r'https?://video-downloads\.googleusercontent\.com/[^\s\'"<>\\]+', combined_content)
-                if g_match:
-                    g_direct = g_match.group(0).replace("&amp;", "&").rstrip('\\"')
-                    if is_safe_url(g_direct):
+                # Workers check
+                w_match = re.search(r'https?://[a-zA-Z0-9.-]+\.workers\.dev/[^\s\'"<>\\]+', combined_content)
+                if w_match:
+                    w_direct = w_match.group(0).replace("&amp;", "&").rstrip('\\"')
+                    if is_safe_url(w_direct):
                         return {
                             "status": "SUCCESS",
-                            "host": "Google CDN",
-                            "direct_url": g_direct,
+                            "host": "Cloud Resume Worker",
+                            "direct_url": w_direct,
                             "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
                         }
 
@@ -1035,6 +1114,18 @@ class LinkResolver:
                             "status": "SUCCESS",
                             "host": "Pixeldrain API",
                             "direct_url": pd_direct,
+                            "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
+                        }
+
+                # R2 / Cloudflare storage check
+                r2_match = re.search(r'https?://[a-zA-Z0-9.-]+(?:\.r2\.cloudflarestorage\.com|\.r2\.dev)/[^\s\'"<>\\]+', combined_content)
+                if r2_match:
+                    r2_direct = r2_match.group(0).replace("&amp;", "&").rstrip('\\"')
+                    if is_safe_url(r2_direct):
+                        return {
+                            "status": "SUCCESS",
+                            "host": "Cloudflare R2 Direct",
+                            "direct_url": r2_direct,
                             "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
                         }
 
@@ -1059,10 +1150,31 @@ class LinkResolver:
                             "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
                         }
 
-                # Check for R2 / Pixeldrain / Workers inside response
+                # Check for Workers / Pixeldrain / R2 inside response
                 sub_candidates = await self.harvest_all_options(client, resp_url_str, html=r.text)
                 for sc in sub_candidates:
-                    if sc.get("type") in ["worker_direct", "r2_direct", "pixeldrain", "instant_cdn"]:
+                    if sc.get("type") in ["worker_direct", "r2_direct", "pixeldrain"]:
+                        return {
+                            "status": "SUCCESS",
+                            "host": sc.get("label", "Direct CDN"),
+                            "direct_url": sc.get("url"),
+                            "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
+                        }
+
+                # Google CDN check (tried after workers and range mirrors)
+                g_match = re.search(r'https?://video-downloads\.googleusercontent\.com/[^\s\'"<>\\]+', combined_content)
+                if g_match:
+                    g_direct = g_match.group(0).replace("&amp;", "&").rstrip('\\"')
+                    if is_safe_url(g_direct):
+                        return {
+                            "status": "SUCCESS",
+                            "host": "Google CDN",
+                            "direct_url": g_direct,
+                            "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
+                        }
+
+                for sc in sub_candidates:
+                    if sc.get("type") in ["instant_cdn", "google_drive"]:
                         return {
                             "status": "SUCCESS",
                             "host": sc.get("label", "Direct CDN"),
@@ -1110,19 +1222,51 @@ class LinkResolver:
                             html = r.text
                             soup = BeautifulSoup(html, "lxml")
 
-                            # 1. Direct Stream Check
-                            g_cdn = re.search(r'https?://video-downloads\.googleusercontent\.com/[^\s\'"<>\\]+', f"{current_url} {html}")
-                            if g_cdn:
-                                return g_cdn.group(0).replace("&amp;", "&").rstrip('\\"'), current_url, html
-
+                            # 1. Direct Stream Check (Workers and Range mirrors first)
                             w_cdn = re.search(r'https?://[a-zA-Z0-9.-]+\.workers\.dev/[^\s\'"<>\\]+', html)
                             if w_cdn:
                                 return w_cdn.group(0).replace("&amp;", "&").rstrip('\\"'), current_url, html
 
+                            pxl_match = re.search(r'https?://pixeldrain\.(?:com|dev)/(?:u|api/file)/([a-zA-Z0-9]+)', html)
+                            if pxl_match and pxl_match.group(1) not in ["negn6f", ""]:
+                                return f"https://pixeldrain.dev/api/file/{pxl_match.group(1)}", current_url, html
+
+                            r2_match = re.search(r'https?://[a-zA-Z0-9.-]+(?:\.r2\.cloudflarestorage\.com|\.r2\.dev)/[^\s\'"<>\\]+', html)
+                            if r2_match:
+                                return r2_match.group(0).replace("&amp;", "&").rstrip('\\"'), current_url, html
+
+                            g_cdn = re.search(r'https?://video-downloads\.googleusercontent\.com/[^\s\'"<>\\]+', f"{current_url} {html}")
+                            if g_cdn:
+                                return g_cdn.group(0).replace("&amp;", "&").rstrip('\\"'), current_url, html
+
                             # 2. Check if reached File Landing Page (e.g. driveseed.org/file/...)
                             is_file_landing = bool("/file/" in current_url or "/download" in current_url or "/view" in current_url or "/zfile/" in html or re.search(r'video-(?:gen|seed|plex)', html))
                             if is_file_landing:
-                                # A. Check Instant Download (VideoGen / VideoSeed)
+                                # A. Check Resume Cloud (/zfile/...)
+                                zfile_links = [a["href"] for a in soup.find_all("a", href=True) if "/zfile/" in a["href"]]
+                                if not zfile_links and "/file/" in current_url:
+                                    zfile_links = [current_url.replace("/file/", "/zfile/")]
+
+                                if zfile_links:
+                                    z_target = urllib.parse.urljoin(current_url, zfile_links[0])
+                                    try:
+                                        r_z = s.get(z_target, headers={"Referer": current_url}, timeout=10.0)
+                                        w_match = re.search(r'https?://[a-zA-Z0-9.-]+\.workers\.dev/[^\s\'"<>\\]+', r_z.text)
+                                        if w_match:
+                                            return w_match.group(0).replace("&amp;", "&").rstrip('\\"'), current_url, html
+                                    except Exception:
+                                        pass
+
+                                # B. Check Pixeldrain or R2
+                                pxl_match = re.search(r'https?://pixeldrain\.(?:com|dev)/(?:u|api/file)/([a-zA-Z0-9]+)', html)
+                                if pxl_match and pxl_match.group(1) not in ["negn6f", ""]:
+                                    return f"https://pixeldrain.dev/api/file/{pxl_match.group(1)}", current_url, html
+
+                                r2_match = re.search(r'https?://[a-zA-Z0-9.-]+(?:\.r2\.cloudflarestorage\.com|\.r2\.dev)/[^\s\'"<>\\]+', html)
+                                if r2_match:
+                                    return r2_match.group(0).replace("&amp;", "&").rstrip('\\"'), current_url, html
+
+                                # C. Check Instant Download (VideoGen / VideoSeed)
                                 inst_links = [a["href"] for a in soup.find_all("a", href=True) if any(k in a["href"] for k in ["video-gen", "video-seed", "video-plex", "video-downloads"])]
                                 if inst_links:
                                     inst_target = urllib.parse.urljoin(current_url, inst_links[0])
@@ -1138,30 +1282,6 @@ class LinkResolver:
                                             return g_match.group(0).replace("&amp;", "&").rstrip('\\"'), current_url, html
                                     except Exception:
                                         pass
-
-                                # B. Check Resume Cloud (/zfile/...)
-                                zfile_links = [a["href"] for a in soup.find_all("a", href=True) if "/zfile/" in a["href"]]
-                                if not zfile_links and "/file/" in current_url:
-                                    zfile_links = [current_url.replace("/file/", "/zfile/")]
-
-                                if zfile_links:
-                                    z_target = urllib.parse.urljoin(current_url, zfile_links[0])
-                                    try:
-                                        r_z = s.get(z_target, headers={"Referer": current_url}, timeout=10.0)
-                                        w_match = re.search(r'https?://[a-zA-Z0-9.-]+\.workers\.dev/[^\s\'"<>\\]+', r_z.text)
-                                        if w_match:
-                                            return w_match.group(0).replace("&amp;", "&").rstrip('\\"'), current_url, html
-                                    except Exception:
-                                        pass
-
-                                # C. Check Pixeldrain or R2
-                                pxl_match = re.search(r'https?://pixeldrain\.(?:com|dev)/(?:u|api/file)/([a-zA-Z0-9]+)', html)
-                                if pxl_match and pxl_match.group(1) not in ["negn6f", ""]:
-                                    return f"https://pixeldrain.dev/api/file/{pxl_match.group(1)}", current_url, html
-
-                                r2_match = re.search(r'https?://[a-zA-Z0-9.-]+(?:\.r2\.cloudflarestorage\.com|\.r2\.dev)/[^\s\'"<>\\]+', html)
-                                if r2_match:
-                                    return r2_match.group(0).replace("&amp;", "&").rstrip('\\"'), current_url, html
 
                                 return None, current_url, html
 
@@ -1306,11 +1426,17 @@ class LinkResolver:
                 logger.info(f"[DriveSeed Fail] Host: {target_host} | Elapsed: {elapsed}ms | Reason: no buttons found")
                 return {"status": "FAILED", "error": "No download buttons found on landing page", "elapsed_ms": elapsed}
 
-            # 3. Race all discovered candidates concurrently
-            tasks = [self.resolve_candidate(client, c, parent_url=target_landing_url) for c in candidates]
-            for completed_task in asyncio.as_completed(tasks):
-                res = await completed_task
+            # 3. Resolve discovered candidates in priority order with speed-gating
+            candidates.sort(key=lambda x: x.get("score", 0), reverse=True)
+            for c in candidates:
+                res = await self.resolve_candidate(client, c, parent_url=target_landing_url)
                 if res.get("status") == "SUCCESS" and res.get("direct_url"):
+                    direct_u = res.get("direct_url")
+                    if "r2.cloudflarestorage.com" in direct_u or ".r2.dev" in direct_u:
+                        probe = await self.probe_socket_speed(client, direct_u, required_mbps=15.0)
+                        if not probe.get("pass"):
+                            logger.warning(f"[SpeedGate Reject] Throttled R2 stream ({probe.get('speed_mbps')} Mbps < 15 Mbps). Failing over...")
+                            continue
                     res["total_harvested_options"] = len(candidates)
                     res["elapsed_ms"] = round((time.perf_counter() - t0) * 1000, 2)
                     return res
@@ -1366,10 +1492,16 @@ class LinkResolver:
             # Dynamic harvesting across V-Cloud
             candidates = await self.harvest_all_options(client, target_url, html=html)
             if candidates:
-                tasks = [self.resolve_candidate(client, c, parent_url=target_url) for c in candidates]
-                for completed in asyncio.as_completed(tasks):
-                    res = await completed
+                candidates.sort(key=lambda x: x.get("score", 0), reverse=True)
+                for c in candidates:
+                    res = await self.resolve_candidate(client, c, parent_url=target_url)
                     if res.get("status") == "SUCCESS" and res.get("direct_url"):
+                        direct_u = res.get("direct_url")
+                        if "r2.cloudflarestorage.com" in direct_u or ".r2.dev" in direct_u:
+                            probe = await self.probe_socket_speed(client, direct_u, required_mbps=15.0)
+                            if not probe.get("pass"):
+                                logger.warning(f"[SpeedGate Reject] Throttled R2 stream ({probe.get('speed_mbps')} Mbps < 15 Mbps). Failing over...")
+                                continue
                         return res
 
         except Exception as e:
@@ -1419,9 +1551,11 @@ class LinkResolver:
             candidates = await self.harvest_all_options(client, target_url, html=html)
 
             # If HubCloud / Gyanigurus, find hidden gamerxyt link directly in raw HTML (exclude images/favicons)
-            hub_match = re.search(r'https?://(?:hubcloud\.[a-z]+|gamerxyt\.com)/(?:hubcloud\.php|drive/[a-zA-Z0-9_-]+|\?id=[a-zA-Z0-9_-]+)[^\s\'"<>\\]*', html)
+            hub_match = re.search(r'https?://(?:gamerxyt\.com|hubcloud\.[a-z]+)/hubcloud\.php[^\s\'"<>\\]*', html)
             if not hub_match:
                 hub_match = re.search(r'https?://gamerxyt\.com/[^\s\'"<>\\]+', html)
+            if not hub_match:
+                hub_match = re.search(r'https?://(?:hubcloud\.[a-z]+|gamerxyt\.com)/(?:hubcloud\.php|\?id=[a-zA-Z0-9_-]+)[^\s\'"<>\\]*', html)
             if hub_match:
                 hub_url = hub_match.group(0).replace("&amp;", "&")
                 if is_safe_url(hub_url):
@@ -1433,11 +1567,17 @@ class LinkResolver:
 
             if candidates:
                 candidates.sort(key=lambda x: x.get("score", 0), reverse=True)
-                tasks = [self.resolve_candidate(client, c, parent_url=c.get("parent_url") or target_url) for c in candidates]
                 quota_exceeded_res = None
-                for completed in asyncio.as_completed(tasks):
-                    res = await completed
+                for c in candidates:
+                    res = await self.resolve_candidate(client, c, parent_url=c.get("parent_url") or target_url)
                     if res.get("status") == "SUCCESS" and res.get("direct_url"):
+                        direct_u = res.get("direct_url")
+                        # If candidate is R2, enforce speed-gate probe for 4K releases
+                        if "r2.cloudflarestorage.com" in direct_u or ".r2.dev" in direct_u:
+                            probe = await self.probe_socket_speed(client, direct_u, required_mbps=15.0)
+                            if not probe.get("pass"):
+                                logger.warning(f"[SpeedGate Reject] Throttled R2 stream ({probe.get('speed_mbps')} Mbps < 15 Mbps). Failing over to next mirror...")
+                                continue
                         return res
                     if res.get("status") == "QUOTA_EXCEEDED":
                         quota_exceeded_res = res
@@ -1893,11 +2033,17 @@ class LinkResolver:
                     # General landing page dynamic inspection
                     candidates = await self.harvest_all_options(client, url_str)
                     if candidates:
-                        tasks = [self.resolve_candidate(client, c, parent_url=url_str) for c in candidates]
+                        candidates.sort(key=lambda x: x.get("score", 0), reverse=True)
                         found_res = None
-                        for completed in asyncio.as_completed(tasks):
-                            c_res = await completed
+                        for c in candidates:
+                            c_res = await self.resolve_candidate(client, c, parent_url=url_str)
                             if c_res.get("status") == "SUCCESS" and c_res.get("direct_url"):
+                                direct_u = c_res.get("direct_url")
+                                if "r2.cloudflarestorage.com" in direct_u or ".r2.dev" in direct_u:
+                                    probe = await self.probe_socket_speed(client, direct_u, required_mbps=15.0)
+                                    if not probe.get("pass"):
+                                        logger.warning(f"[SpeedGate Reject] Throttled R2 stream ({probe.get('speed_mbps')} Mbps < 15 Mbps). Failing over...")
+                                        continue
                                 found_res = c_res
                                 break
                         res = found_res or {

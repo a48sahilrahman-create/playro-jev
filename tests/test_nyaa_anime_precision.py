@@ -174,6 +174,9 @@ async def test_search_nyaa_black_clover_s01e01_live():
     fs = FastScrapers()
     async with httpx.AsyncClient(http2=True, follow_redirects=True) as client:
         results = await fs.search_nyaa(client, "Black Clover", season=1, episode=1)
+        if not results:
+            await asyncio.sleep(1.0)
+            results = await fs.search_nyaa(client, "Black Clover", season=1, episode=1)
 
     assert len(results) >= 2, f"Expected at least 2 discrete releases for Black Clover S01E01, got {len(results)}"
 

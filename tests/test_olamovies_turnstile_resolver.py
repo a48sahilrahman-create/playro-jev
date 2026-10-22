@@ -2,7 +2,7 @@ import pytest
 import asyncio
 import base64
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch, mock_open
 from pathlib import Path
 
 from auth_bridge import extract_b64_redirect_url, try_click_turnstile, InteractiveAuthBridge, BROWSER_PROFILE_DIR
@@ -351,3 +351,129 @@ class TestOlaMoviesResolverAndBridge:
     def test_browser_profile_dir_configured(self):
         assert BROWSER_PROFILE_DIR.name == ".browser_profile"
         assert str(BROWSER_PROFILE_DIR).endswith(".browser_profile")
+
+    @pytest.mark.asyncio
+    async def test_dynamic_mirror_resolution_and_headers(self):
+        resolver = LinkResolver()
+        client = AsyncMock()
+        url = "https://drive.olamovies.mov/item/test123"
+
+        captured_headers = {}
+        async def mock_safe_fetch(_client, method, fetch_url, headers=None, **kwargs):
+            nonlocal captured_headers
+            captured_headers = headers or {}
+            mock_resp = MagicMock()
+            mock_resp.text = '<html><a href="https://dl.olamdrive.com/dl?t=dynamic_mirror_token"></a></html>'
+            mock_resp.url = fetch_url
+            return mock_resp
+
+        with patch("link_resolver.is_safe_url", return_value=True):
+            with patch("link_resolver.HAS_CURL_CFFI", False):
+                with patch("domain_resolver.get_active_mirror_sync", return_value="https://v7.olamovies.mov"):
+                    with patch.object(resolver, "safe_fetch", side_effect=mock_safe_fetch):
+                        res = await resolver.resolve_olamovies(client, url)
+                        assert res["status"] == "SUCCESS"
+                        assert captured_headers.get("Referer") == "https://v7.olamovies.mov/"
+                        assert captured_headers.get("Origin") == "https://v7.olamovies.mov"
+
+    @pytest.mark.asyncio
+    async def test_dynamic_mirror_fallback_on_exception(self):
+        resolver = LinkResolver()
+        client = AsyncMock()
+        url = "https://drive.olamovies.mov/item/test_fallback"
+
+        captured_headers = {}
+        async def mock_safe_fetch(_client, method, fetch_url, headers=None, **kwargs):
+            nonlocal captured_headers
+            captured_headers = headers or {}
+            mock_resp = MagicMock()
+            mock_resp.text = '<html><a href="https://dl.olamdrive.com/dl?t=fallback_token"></a></html>'
+            mock_resp.url = fetch_url
+            return mock_resp
+
+        with patch("link_resolver.is_safe_url", return_value=True):
+            with patch("link_resolver.HAS_CURL_CFFI", False):
+                with patch("domain_resolver.get_active_mirror_sync", side_effect=RuntimeError("DNS failure")):
+                    with patch.object(resolver, "safe_fetch", side_effect=mock_safe_fetch):
+                        res = await resolver.resolve_olamovies(client, url)
+                        assert res["status"] == "SUCCESS"
+                        assert captured_headers.get("Referer") == "https://v6.olamovies.mov/"
+                        assert captured_headers.get("Origin") == "https://v6.olamovies.mov"
+
+    @pytest.mark.asyncio
+    async def test_cookie_loading_from_session_vault_and_file(self):
+        resolver = LinkResolver()
+        client = AsyncMock()
+        url = "https://links.olamovies.mov/item/cookie_test"
+
+        vault_content = {
+            "olamovies": [
+                {"name": "cf_clearance", "value": "vault_val_1", "domain": ".olamovies.mov"},
+                {"name": "om_did", "value": "vault_val_2", "domain": "paybase.olamovies.mov"}
+            ],
+            "paybase": [
+                {"name": "pb_sess", "value": "vault_val_3", "domain": ".paybase.olamovies.mov"}
+            ]
+        }
+        extra_file_content = [
+            {"name": "om_extra", "value": "extra_val_4", "domain": ".olamovies.mov"}
+        ]
+
+        loaded_cookies = []
+        mock_session_inst = MagicMock()
+        def mock_set_cookie(name, value, domain=None):
+            loaded_cookies.append({"name": name, "value": value, "domain": domain})
+        mock_session_inst.cookies.set = mock_set_cookie
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        # base64 encoded direct link
+        target_stream = "https://dl.olamdrive.com/dl?t=stream_from_b64"
+        b64 = base64.b64encode(target_stream.encode()).decode()
+        mock_resp.text = f'<html><input type="hidden" name="token" value="{b64}"></html>'
+        mock_session_inst.get.return_value = mock_resp
+
+        with patch("link_resolver.is_safe_url", return_value=True):
+            with patch("link_resolver.HAS_CURL_CFFI", True):
+                with patch.object(resolver.auth_bridge, "get_provider_cookies", return_value=[]):
+                    with patch("link_resolver.stealth_requests.Session", return_value=mock_session_inst):
+                        with patch("builtins.open", mock_open()):
+                            with patch("os.path.exists", return_value=True):
+                                with patch("link_resolver.json.load", side_effect=[vault_content, extra_file_content]):
+                                    res = await resolver.resolve_olamovies(client, url)
+                                    cookie_names = [c["name"] for c in loaded_cookies]
+                                    assert "cf_clearance" in cookie_names
+                                    assert "om_did" in cookie_names
+                                    assert "pb_sess" in cookie_names
+                                    assert "om_extra" in cookie_names
+                            cookie_names = [c["name"] for c in loaded_cookies]
+                            assert "cf_clearance" in cookie_names
+                            assert "om_did" in cookie_names
+                            assert "pb_sess" in cookie_names
+                            assert "om_extra" in cookie_names
+
+    @pytest.mark.asyncio
+    async def test_turnstile_challenge_fast_failover_interactive(self):
+        resolver = LinkResolver()
+        client = AsyncMock()
+        url = "https://links.olamovies.mov/item/turnstile_challenge"
+
+        with patch("link_resolver.HAS_CURL_CFFI", False):
+            with patch.object(resolver, "_solve_olamovies_stealth", return_value=None):
+                with patch.object(resolver.auth_bridge, "trigger_interactive_login", new_callable=AsyncMock) as mock_interactive:
+                    mock_interactive.return_value = {
+                        "status": "TIMEOUT",
+                        "error": "Interactive login timed out after 3.5s"
+                    }
+                    t_start = time.perf_counter()
+                    res = await resolver.resolve_olamovies(client, url, allow_interactive=True)
+                    elapsed = time.perf_counter() - t_start
+
+                    # Must fail fast under 4.0s
+                    assert elapsed < 4.0
+                    assert res["status"] == "CLOUDFLARE_PROTECTED"
+                    assert "Fast failover" in res["error"]
+                    # Must have called trigger_interactive_login with timeout <= 3.5s (strictly < 4.0s)
+                    mock_interactive.assert_awaited_once()
+                    _, kwargs = mock_interactive.call_args
+                    assert kwargs.get("timeout", 60.0) <= 3.5
+

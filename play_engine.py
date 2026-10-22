@@ -179,14 +179,18 @@ def rank_release(release: dict) -> tuple:
             elif "unblockedgames" in target or "driveseed" in target:
                 host_score = 10
         else:
-            if any(h in combined_meta for h in ["googleusercontent", "pixeldrain", "fastdl", "nexdrive", "vcloud"]):
+            if any(h in combined_meta for h in ["workers.dev", "/zfile/", "worker"]):
                 host_score = 100
-            elif "hubdrive" in combined_meta:
+            elif any(h in combined_meta for h in ["pixeldrain", "fastdl", "nexdrive", "vcloud"]):
+                host_score = 95
+            elif any(h in combined_meta for h in ["r2.", "cloudflarestorage"]):
                 host_score = 90
-            elif any(h in combined_meta for h in ["hubcloud", "gamerxyt", "worker"]):
+            elif "hubdrive" in combined_meta:
+                host_score = 85
+            elif any(h in combined_meta for h in ["hubcloud", "gamerxyt"]):
                 host_score = 75
-            elif "r2." in combined_meta:
-                host_score = 80
+            elif any(h in combined_meta for h in ["googleusercontent", "drive.usercontent.google.com"]):
+                host_score = 70
             elif target.startswith("magnet:"):
                 host_score = 60
             elif "t.me" in target or "tg://" in target:
@@ -207,65 +211,66 @@ class PlayEngine:
         self.vlc_path = find_vlc()
         self.speed_gated_resolver = speed_gated_resolver
 
-    def sort_candidates_speed_gated(self, candidates: list, is_4k: bool = False) -> list:
+    def sort_candidates_speed_gated(self, candidates: list, is_4k: bool = False, seek_mode: bool = False) -> list:
         """
         Sorts candidates using SpeedGatedResolver:
-        - For 4K and high-bitrate releases:
-          - Cloudflare Workers and seekable mirrors (base_speed >= 95 or is_worker): +20 bonus
-          - Range-capable mirrors (Pixeldrain / R2, base_speed >= 90): +15 bonus
-          - Remove +10/+15 bonus for Google CDN / googleusercontent and demote to fallback status
+        - Prioritization universally aligned:
+          - Cloudflare Workers (score 100)
+          - Fast File Mirrors (Pixeldrain, FastDL, NexDrive, VCloud) (score 95)
+          - Cloudflare R2 Mirrors (score 90)
+          - Google CDN (score 70 sequential fallback / 10 if seek mode or seekable is False)
+        - Ensures Google CDN is demoted whenever range-capable mirrors exist or when seekable is False.
         """
         if not candidates:
             return []
-        if self.speed_gated_resolver:
-            scored = []
-            for c in candidates:
-                c_copy = dict(c)
-                cand_for_speed = c_copy if (c_copy.get("url") or c_copy.get("direct_url")) else {"url": c_copy.get("target_url", ""), **c_copy}
-                base_score = self.speed_gated_resolver.score_candidate(cand_for_speed)
-                c_res = str(c_copy.get("resolution") or "").upper()
-                c_size_gb = extract_file_size_gb(c_copy)
-                c_codec = str(c_copy.get("codec") or "").upper()
-                c_target = (c_copy.get("target_url") or c_copy.get("direct_url") or "").lower()
-                c_label = str(c_copy.get("label") or "").lower()
-                c_title = str(c_copy.get("title") or "").lower()
-                c_meta = f"{c_target} {c_label} {c_title}"
 
-                c_is_4k = is_4k or ("2160P" in c_res or "4K" in c_res)
-                c_is_high_bitrate = (
-                    c_is_4k
-                    or c_size_gb >= 8.0
-                    or "REMUX" in c_codec
-                    or "BLURAY" in c_codec
-                    or any(k in c_meta for k in ["high-bitrate", "high bitrate", "remux"])
-                )
+        scored = []
+        for c in candidates:
+            c_copy = dict(c)
+            cand_for_speed = c_copy if (c_copy.get("url") or c_copy.get("direct_url")) else {"url": c_copy.get("target_url", ""), **c_copy}
+            c_target = (c_copy.get("target_url") or c_copy.get("direct_url") or c_copy.get("url") or "").lower()
+            c_label = str(c_copy.get("label") or "").lower()
+            c_title = str(c_copy.get("title") or "").lower()
+            c_meta = f"{c_target} {c_label} {c_title}"
 
-                c_is_google = (
-                    any(g in c_meta for g in ["googleusercontent", "drive.usercontent.google.com"])
-                    or "10gbps" in c_meta
-                    or "gpdl." in c_meta
-                    or "google cdn" in c_meta
-                )
-                c_is_worker = any(w in c_meta for w in ["workers.dev", "/zfile/", "worker"])
-                c_is_range_mirror = any(r in c_meta for r in ["pixeldrain", "r2.", "cloudflarestorage", "fastdl", "fast-dl", "fuckingfast"])
-                c_is_seekable = bool(c_copy.get("seekable")) or (base_score >= 95 and not c_is_range_mirror)
+            c_is_worker = any(w in c_meta for w in ["workers.dev", "/zfile/", "worker"])
+            c_is_fast = any(f in c_meta for f in ["pixeldrain", "pixel.", "fastdl", "fast-dl", "nexdrive", "vcloud", "fuckingfast", "buzz", "cryptonewz"])
+            c_is_r2 = any(r in c_meta for r in ["r2.cloudflarestorage", "cloudflarestorage", "r2.dev", ".r2.", "r2 direct"]) or ("r2" in c_label and "r2" not in c_title) or "fsl" in c_label
+            c_is_google = (
+                any(g in c_meta for g in ["googleusercontent", "drive.usercontent.google.com"])
+                or "10gbps" in c_meta
+                or "gpdl." in c_meta
+                or "google cdn" in c_meta
+            )
 
-                if c_is_high_bitrate:
-                    if c_is_google:
-                        # Demote googleusercontent to fallback status and remove bonuses
-                        base_score = 40
-                    elif c_is_worker or (base_score >= 95 and not c_is_range_mirror) or c_is_seekable:
-                        # Cloudflare Workers and seekable mirrors (base_speed >= 95 or is_worker): +20 bonus
-                        eff_base = max(base_score, 95) if (base_score >= 95 or c_is_seekable) else max(base_score, 85)
-                        base_score = eff_base + 20
-                    elif c_is_range_mirror or base_score >= 90:
-                        # Range-capable mirrors (Pixeldrain / R2, base_speed >= 90): +15 bonus
-                        eff_base = max(base_score, 90) if c_is_range_mirror else base_score
-                        base_score = eff_base + 15
-                c_copy["_speed_score"] = base_score
-                scored.append(c_copy)
-            return sorted(scored, key=lambda r: (r.get("_speed_score", 0), rank_release(r)), reverse=True)
-        return sorted(candidates, key=rank_release, reverse=True)
+            c_seekable = c_copy.get("seekable")
+            if c_seekable is None and "probe_result" in c_copy and isinstance(c_copy["probe_result"], dict):
+                c_seekable = c_copy["probe_result"].get("seekable")
+
+            if self.speed_gated_resolver:
+                base_score = self.speed_gated_resolver.score_candidate(cand_for_speed, seek_mode=seek_mode)
+            else:
+                base_score = 50
+
+            # Universal alignment: Cloudflare Workers (100) > Fast Mirrors (95) > R2 (90) > Google CDN (70 / 10)
+            if seek_mode and c_seekable is False:
+                base_score = 10
+            elif c_is_worker:
+                base_score = 100
+            elif c_is_fast:
+                base_score = 95
+            elif c_is_r2:
+                base_score = 90
+            elif c_is_google:
+                if seek_mode or c_seekable is False:
+                    base_score = 10
+                else:
+                    base_score = 70
+
+            c_copy["_speed_score"] = base_score
+            scored.append(c_copy)
+
+        return sorted(scored, key=lambda r: (r.get("_speed_score", 0), rank_release(r)), reverse=True)
 
     async def resolve_candidate_speed_gated(self, candidate: dict, probe_speed: bool = False, min_mbps: float = 15.0) -> dict:
         """

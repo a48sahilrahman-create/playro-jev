@@ -1594,10 +1594,10 @@ class LinkResolver:
         logger.info(f"[HubCloud Fail] Host: {target_host} | Elapsed: {elapsed}ms | Reason: no stream URL found")
         return {"status": "FAILED", "error": "No R2 or Pixeldrain stream URL found in HubCloud", "elapsed_ms": elapsed}
 
-    async def _solve_olamovies_stealth(self, url: str, timeout: float = 12.0) -> Optional[str]:
+    async def _solve_olamovies_stealth(self, url: str, timeout: float = 3.5) -> Optional[str]:
         """
         Fast automated headless Turnstile solver using patchright / playwright.
-        Attempts to bypass Cloudflare Turnstile and extract direct CDN stream in < 12 seconds
+        Attempts to bypass Cloudflare Turnstile and extract direct CDN stream in < 4.0 seconds
         without requiring human desktop intervention.
         """
         if not HAS_PATCHRIGHT:
@@ -1727,6 +1727,13 @@ class LinkResolver:
 
         target_host = urllib.parse.urlparse(url).netloc or "OlaMovies"
         try:
+            from domain_resolver import get_active_mirror_sync
+            active_mirror = get_active_mirror_sync("olamovies") or "https://v6.olamovies.mov"
+        except Exception:
+            active_mirror = "https://v6.olamovies.mov"
+        active_mirror_clean = (active_mirror or "https://v6.olamovies.mov").rstrip("/")
+
+        try:
             # 1. Direct CDN shortcuts
             if "dl.olamdrive.com/dl" in url:
                 return {
@@ -1742,13 +1749,13 @@ class LinkResolver:
                     try:
                         def _curl_drive():
                             s = stealth_requests.Session(impersonate="chrome120")
-                            r_d = s.get(url, headers={"Referer": "https://v4.olamovies.mov/", **DEFAULT_HEADERS}, timeout=HOP_TIMEOUT)
+                            r_d = s.get(url, headers={"Referer": f"{active_mirror_clean}/", "Origin": active_mirror_clean, **DEFAULT_HEADERS}, timeout=HOP_TIMEOUT)
                             return r_d.text
                         text_content = await asyncio.to_thread(_curl_drive)
                     except Exception:
                         pass
                 if not text_content:
-                    r1 = await self.safe_fetch(client, "GET", url, headers=DEFAULT_HEADERS, timeout=HOP_TIMEOUT)
+                    r1 = await self.safe_fetch(client, "GET", url, headers={"Referer": f"{active_mirror_clean}/", "Origin": active_mirror_clean, **DEFAULT_HEADERS}, timeout=HOP_TIMEOUT)
                     text_content = r1.text
 
                 dl_match = re.search(r'https?://dl\.olamdrive\.com/dl\?t=[^\s\'"<>\\]+', text_content)
@@ -1773,17 +1780,44 @@ class LinkResolver:
                         "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
                     }
 
-            if "tpi.li" in url or "links.olamovies" in url or "links.ol-am" in url:
+            if "tpi.li" in url or "links.olamovies" in url or "links.ol-am" in url or "drive.olamovies" in url:
                 # 3. Strategy 1: Check vault cookies with curl_cffi (Chrome 120 TLS fingerprint)
-                cookies = self.auth_bridge.get_provider_cookies("olamovies")
-                if not cookies:
-                    cookie_file = os.path.join(os.path.dirname(__file__), "olamovies_session_cookies.json")
-                    if os.path.exists(cookie_file):
-                        try:
-                            with open(cookie_file, "r", encoding="utf-8") as cf:
-                                cookies = json.load(cf)
-                        except Exception:
-                            pass
+                cookies: List[Dict[str, Any]] = []
+                if hasattr(self.auth_bridge, "get_provider_cookies"):
+                    bridge_cookies = self.auth_bridge.get_provider_cookies("olamovies")
+                    if isinstance(bridge_cookies, list):
+                        cookies.extend(bridge_cookies)
+
+                # In addition to olamovies_session_cookies.json, load cookies from session_vault.json (keys "olamovies" and "paybase")
+                vault_file = os.path.join(os.path.dirname(__file__), "session_vault.json")
+                if os.path.exists(vault_file):
+                    try:
+                        with open(vault_file, "r", encoding="utf-8") as vf:
+                            vault_data = json.load(vf)
+                            if isinstance(vault_data, dict):
+                                for vk in ("olamovies", "paybase"):
+                                    vlist = vault_data.get(vk)
+                                    if isinstance(vlist, list):
+                                        cookies.extend(vlist)
+                    except Exception as ve:
+                        logger.debug(f"[OlaMovies Session Vault Cookie Load Error] {ve}")
+
+                cookie_file = os.path.join(os.path.dirname(__file__), "olamovies_session_cookies.json")
+                if os.path.exists(cookie_file):
+                    try:
+                        with open(cookie_file, "r", encoding="utf-8") as cf:
+                            f_cookies = json.load(cf)
+                            if isinstance(f_cookies, list):
+                                cookies.extend(f_cookies)
+                    except Exception as fe:
+                        logger.debug(f"[OlaMovies Session Cookie Load Error] {fe}")
+
+                # Deduplicate loaded cookies by (name, domain)
+                deduped: Dict[Tuple[str, str], Dict[str, Any]] = {}
+                for ck in cookies:
+                    if isinstance(ck, dict) and "name" in ck and "value" in ck:
+                        deduped[(ck.get("name", ""), ck.get("domain", ""))] = ck
+                cookies = list(deduped.values())
 
                 if HAS_CURL_CFFI and cookies and is_safe_url(url):
                     try:
@@ -1793,7 +1827,7 @@ class LinkResolver:
                                 ck_domain = ck.get("domain", "")
                                 if any(d in ck_domain for d in ["olamovies", "paybase", "ol-am", "cloudflare"]):
                                     s.cookies.set(ck["name"], ck["value"], domain=ck_domain if ck_domain.startswith(".") else f".{target_host}")
-                            r_c = s.get(url, headers={"Referer": "https://v4.olamovies.mov/", **DEFAULT_HEADERS}, timeout=HOP_TIMEOUT)
+                            r_c = s.get(url, headers={"Referer": f"{active_mirror_clean}/", "Origin": active_mirror_clean, **DEFAULT_HEADERS}, timeout=min(HOP_TIMEOUT, 3.5))
                             if r_c.status_code == 200 and "Just a moment" not in r_c.text and "Cloudflare" not in r_c.text:
                                 return r_c.text
                             return None
@@ -1809,8 +1843,15 @@ class LinkResolver:
                     except Exception:
                         pass
 
-                # 4. Strategy 2: Attempt automated headless stealth solve (< 10 seconds)
-                stealth_stream = await self._solve_olamovies_stealth(url, timeout=10.0)
+                # 4. Strategy 2: Attempt automated headless stealth solve (< 4.0 seconds)
+                try:
+                    stealth_stream = await asyncio.wait_for(
+                        self._solve_olamovies_stealth(url, timeout=3.5),
+                        timeout=3.8
+                    )
+                except Exception:
+                    stealth_stream = None
+
                 if stealth_stream and is_safe_url(stealth_stream):
                     logger.info(f"[OlaMovies Stealth Hit] Resolved direct stream: {stealth_stream[:80]}")
                     if hasattr(self.auth_bridge, "_resolved_streams"):
@@ -1822,7 +1863,7 @@ class LinkResolver:
                         "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
                     }
 
-                # 5. Strategy 3: Interactive persistent solver bridge with automated Turnstile clicker
+                # 5. Strategy 3: Fast failover on Turnstile challenges (< 4.0s timeout)
                 if not allow_interactive:
                     return {
                         "status": "CLOUDFLARE_PROTECTED",
@@ -1832,7 +1873,11 @@ class LinkResolver:
                         "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
                     }
 
-                auth_res = await self.auth_bridge.trigger_interactive_login("olamovies", target_url=url, timeout=60.0)
+                try:
+                    auth_res = await self.auth_bridge.trigger_interactive_login("olamovies", target_url=url, timeout=3.5)
+                except Exception as ex:
+                    auth_res = {"status": "FAILED", "error": f"Interactive login failed fast: {ex}"}
+
                 if auth_res.get("status") == "SUCCESS":
                     if auth_res.get("direct_url") and is_safe_url(auth_res["direct_url"]):
                         return {
@@ -1861,7 +1906,7 @@ class LinkResolver:
                                     ck_domain = ck.get("domain", "")
                                     if any(d in ck_domain for d in ["olamovies", "paybase", "ol-am", "cloudflare"]):
                                         s.cookies.set(ck["name"], ck["value"], domain=ck_domain if ck_domain.startswith(".") else f".{target_host}")
-                                r_c = s.get(url, headers={"Referer": "https://v4.olamovies.mov/", **DEFAULT_HEADERS}, timeout=HOP_TIMEOUT)
+                                r_c = s.get(url, headers={"Referer": f"{active_mirror_clean}/", "Origin": active_mirror_clean, **DEFAULT_HEADERS}, timeout=min(HOP_TIMEOUT, 3.5))
                                 return r_c.text if r_c.status_code == 200 else None
                             fresh_html = await asyncio.to_thread(_curl_fresh)
                             if fresh_html:
@@ -1871,11 +1916,12 @@ class LinkResolver:
                         except Exception:
                             pass
 
+                fail_err = auth_res.get("error", "Challenge timeout")
                 return {
-                    "status": "CLOUDFLARE_FAILED",
+                    "status": "CLOUDFLARE_PROTECTED",
                     "host": "OlaMovies Protected",
                     "direct_url": url,
-                    "error": auth_res.get("error", "Cloudflare challenge was not resolved"),
+                    "error": f"Cloudflare Turnstile Active (Fast failover: {fail_err})",
                     "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)
                 }
 

@@ -574,16 +574,26 @@ async def api_stream_accelerated(
     range_header = request.headers.get("Range") or request.headers.get("range")
     p_start = 0
     p_end = None
+    is_suffix_range = False
+    suffix_len = 0
     if range_header and range_header.startswith("bytes="):
-        parts = range_header.replace("bytes=", "").strip().split("-")
-        try:
-            p_start = int(parts[0]) if parts[0] else 0
-        except (ValueError, IndexError):
-            p_start = 0
-        try:
-            p_end = int(parts[1]) if len(parts) > 1 and parts[1] else None
-        except (ValueError, IndexError):
-            p_end = None
+        raw_spec = range_header.replace("bytes=", "").strip()
+        if raw_spec.startswith("-"):
+            is_suffix_range = True
+            try:
+                suffix_len = int(raw_spec[1:])
+            except ValueError:
+                suffix_len = 65536
+        else:
+            parts = raw_spec.split("-", 1)
+            try:
+                p_start = int(parts[0]) if parts[0] else 0
+            except (ValueError, IndexError):
+                p_start = 0
+            try:
+                p_end = int(parts[1]) if len(parts) > 1 and parts[1] else None
+            except (ValueError, IndexError):
+                p_end = None
 
     # 4. Total Size Propagation: Resolve total_size and content_type across engines
     is_google = bool(google_range_adapter and google_range_adapter.is_google_url(target_stream))
@@ -612,6 +622,11 @@ async def api_stream_accelerated(
             resolved_size = 28_399_257_414
 
     MEDIA_TOTAL_SIZE_CACHE[target_stream] = resolved_size
+
+    # If this was a suffix range (e.g. Matroska cues table bytes=-65536), calculate real byte offsets
+    if is_suffix_range:
+        p_start = max(0, resolved_size - suffix_len)
+        p_end = max(0, resolved_size - 1)
 
     # 2. Initial Stream Start / Container Header Probe (p_start == 0 or range_header is None)
     if p_start == 0 or range_header is None:

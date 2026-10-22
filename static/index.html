@@ -3081,13 +3081,13 @@
                     <button onclick="switchToTranscodeAtTime(${targetTime})" class="ml-2 px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs transition-colors shadow">
                         🔄 Switch to Smart Transcode at ${formatTime(targetTime)}
                     </button>
-                    <button onclick="openExternalVLC(currentDirectUrl || currentStreamUrl, ${targetTime})" class="ml-2 px-2.5 py-1 rounded bg-orange-600 hover:bg-orange-500 text-white font-bold text-xs transition-colors">
+                    <button onclick="openExternalVLC(currentDirectUrl || currentStreamUrl, ${targetTime}, currentMirrorUrl, currentRawUrl)" class="ml-2 px-2.5 py-1 rounded bg-orange-600 hover:bg-orange-500 text-white font-bold text-xs transition-colors">
                         ▲ Launch in VLC
                     </button>
-                    <button onclick="openExternalCX(currentDirectUrl || currentStreamUrl)" class="ml-1.5 px-2.5 py-1 rounded bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs transition-colors" title="Launch in CX File Explorer">
+                    <button onclick="openExternalCX(currentDirectUrl || currentStreamUrl, currentMirrorUrl, currentRawUrl)" class="ml-1.5 px-2.5 py-1 rounded bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs transition-colors" title="Launch in CX File Explorer">
                         📁 CX
                     </button>
-                    <button onclick="openExternal1DM(currentDirectUrl || currentStreamUrl)" class="ml-1.5 px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition-colors" title="Launch in 1DM Downloader/Player">
+                    <button onclick="openExternal1DM(currentDirectUrl || currentStreamUrl, currentMirrorUrl, currentRawUrl)" class="ml-1.5 px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition-colors" title="Launch in 1DM Downloader/Player">
                         📥 1DM
                     </button>
                 `;
@@ -3254,7 +3254,7 @@
                 }
                 const currentTime = getCurrentPlaybackTime();
                 showToast("▲ Launching Hardware Bitstreaming in VLC...");
-                openExternalVLC(target, currentTime);
+                openExternalVLC(target, currentTime, currentMirrorUrl, currentRawUrl);
                 return;
             }
 
@@ -3402,7 +3402,7 @@
                 const targetUrl = streamUrl || rawTarget || '';
                 addToHistory(title, badge, targetUrl, rawTarget, targetUrl, posterUrl, 0, 0);
                 try {
-                    await openExternalVLC(targetUrl);
+                    await openExternalVLC(targetUrl, 0, currentMirrorUrl, rawTarget);
                 } catch (err) {
                     console.error("Failed to safely invoke openExternalVLC:", err);
                     showToast("⚠️ Failed to launch VLC: " + (err?.message || err), 4000);
@@ -3473,13 +3473,13 @@
                 <button onclick="switchPlayerMode('bingr_hls')" class="ml-1.5 px-2 py-0.5 rounded bg-cyan-600/90 hover:bg-cyan-600 text-white font-bold text-[11px] transition-colors" title="Switch to Bingr Dynamic HLS Transmuxer (Smooth 4K)">
                     🌊 Bingr HLS
                 </button>
-                <button onclick="openExternalVLC('${directUrl.replace(/'/g, "\\'")}')" class="ml-1.5 px-2 py-0.5 rounded bg-orange-600/90 hover:bg-orange-600 text-white font-bold text-[11px] transition-colors" title="Open in VLC">
+                <button onclick="openExternalVLC('${directUrl.replace(/'/g, "\\'")}', 0, currentMirrorUrl, currentRawUrl)" class="ml-1.5 px-2 py-0.5 rounded bg-orange-600/90 hover:bg-orange-600 text-white font-bold text-[11px] transition-colors" title="Open in VLC">
                     ▲ Open in VLC
                 </button>
-                <button onclick="openExternalCX('${directUrl.replace(/'/g, "\\'")}')" class="ml-1.5 px-2 py-0.5 rounded bg-cyan-600/90 hover:bg-cyan-600 text-white font-bold text-[11px] transition-colors" title="Open in CX File Explorer">
+                <button onclick="openExternalCX('${directUrl.replace(/'/g, "\\'")}', currentMirrorUrl, currentRawUrl)" class="ml-1.5 px-2 py-0.5 rounded bg-cyan-600/90 hover:bg-cyan-600 text-white font-bold text-[11px] transition-colors" title="Open in CX File Explorer">
                     📁 CX
                 </button>
-                <button onclick="openExternal1DM('${directUrl.replace(/'/g, "\\'")}')" class="ml-1.5 px-2 py-0.5 rounded bg-emerald-600/90 hover:bg-emerald-600 text-white font-bold text-[11px] transition-colors" title="Open in 1DM">
+                <button onclick="openExternal1DM('${directUrl.replace(/'/g, "\\'")}', currentMirrorUrl, currentRawUrl)" class="ml-1.5 px-2 py-0.5 rounded bg-emerald-600/90 hover:bg-emerald-600 text-white font-bold text-[11px] transition-colors" title="Open in 1DM">
                     📥 1DM
                 </button>
             `;
@@ -3662,7 +3662,7 @@
                 const currentTime = getCurrentPlaybackTime();
                 if (video) video.pause();
                 showToast("▲ Launching Hardware Bitstreaming in VLC...");
-                openExternalVLC(target, currentTime);
+                openExternalVLC(target, currentTime, currentMirrorUrl, currentRawUrl);
                 return;
             }
 
@@ -4205,7 +4205,9 @@
             // 3. Desktop PC (Windows / Mac / Linux): Launch VLC directly via local companion endpoint with resume timestamp
             try {
                 const startParam = startTime && startTime > 0 ? `&start_time=${Math.floor(startTime)}` : '';
-                const res = await fetch(`${API_BASE}/api/vlc/play?url=${encodeURIComponent(directUrl)}&title=${encodeURIComponent(title)}&accelerate=true${startParam}`);
+                const mParam = mirrorParam ? `&mirror=${encodeURIComponent(mirrorParam)}` : '';
+                const rParam = rawParam ? `&raw_url=${encodeURIComponent(rawParam)}` : '';
+                const res = await fetch(`${API_BASE}/api/vlc/play?url=${encodeURIComponent(directUrl)}&title=${encodeURIComponent(title)}&accelerate=true${startParam}${mParam}${rParam}`);
                 const data = await res.json();
                 if (data.status === 'SUCCESS') {
                     console.log("✅ VLC launched via backend API:", data);
@@ -4223,7 +4225,7 @@
                     window._vlcPollInterval = setInterval(async () => {
                         pollAttempts++;
                         try {
-                            const pollRes = await fetch(`${API_BASE}/api/vlc/play?url=${encodeURIComponent(target)}&title=${encodeURIComponent(title)}&accelerate=true${startParam}&poll=true`);
+                            const pollRes = await fetch(`${API_BASE}/api/vlc/play?url=${encodeURIComponent(target)}&title=${encodeURIComponent(title)}&accelerate=true${startParam}${mParam}${rParam}&poll=true`);
                             const pollData = await pollRes.json();
                             if (pollData.status === 'SUCCESS') {
                                 clearInterval(window._vlcPollInterval);
@@ -4259,7 +4261,7 @@
                         const nextTarget = nextMirror.rawTarget || nextMirror.streamUrl;
                         if (nextTarget) {
                             setTimeout(() => {
-                                openExternalVLC(nextTarget, startTime);
+                                openExternalVLC(nextTarget, startTime, nextMirror.mirrorUrl || currentMirrorUrl, nextMirror.rawTarget || currentRawUrl);
                             }, 500);
                         }
                     } else {
@@ -4311,30 +4313,40 @@
             window.location.href = cxIntent;
         }
 
-        function openExternal1DM(streamUrl) {
+        function openExternal1DM(streamUrl, mirrorUrl = '', rawUrl = '') {
             const target = streamUrl || currentStreamUrl || currentDirectUrl;
             if (!target) {
                 showToast("⚠️ No stream selected to play.", 4000);
                 return;
             }
 
-            const fullUrl = target.startsWith('http') ? target : (window.location.origin + (target.startsWith('/') ? target : '/' + target));
+            const directUrl = target.startsWith('http') ? target : (window.location.origin + (target.startsWith('/') ? target : '/' + target));
+            let accelUrl = directUrl.includes('/api/stream/accelerated') ? directUrl : `${API_BASE}/api/stream/accelerated?url=${encodeURIComponent(directUrl)}`;
+            const rawParam = rawUrl || (typeof currentRawUrl !== 'undefined' ? currentRawUrl : '');
+            if (rawParam && !accelUrl.includes('raw_url=')) {
+                accelUrl += `&raw_url=${encodeURIComponent(rawParam)}`;
+            }
+            const mirrorParam = mirrorUrl || (typeof currentMirrorUrl !== 'undefined' ? currentMirrorUrl : '');
+            if (mirrorParam && !accelUrl.includes('mirror=')) {
+                accelUrl += `&mirror=${encodeURIComponent(mirrorParam)}`;
+            }
 
             // Priority: Native Android TV / Mobile Bridge
             if (window.AndroidTVBridge && typeof window.AndroidTVBridge.openPackagePlayer === 'function') {
                 showToast("📥 Launching in 1DM...", 3000);
-                window.AndroidTVBridge.openPackagePlayer(fullUrl, "idm.internet.download.manager", "video/*");
+                window.AndroidTVBridge.openPackagePlayer(accelUrl, "idm.internet.download.manager", "video/*");
                 return;
             }
 
-            const cleanUrl = fullUrl.replace(/^https?:\/\//i, '');
-            const plusIntent = `intent://${cleanUrl}#Intent;action=android.intent.action.VIEW;package=idm.internet.download.manager.plus;type=video/*;end`;
-            const freeIntent = `intent://${cleanUrl}#Intent;action=android.intent.action.VIEW;package=idm.internet.download.manager;type=video/*;end`;
+            const cleanUrl = accelUrl.replace(/^https?:\/\//i, '');
+            const proto = accelUrl.startsWith('https') ? 'https' : 'http';
+            const plusIntent = `intent://${cleanUrl}#Intent;scheme=${proto};action=android.intent.action.VIEW;package=idm.internet.download.manager.plus;type=video/*;end`;
+            const freeIntent = `intent://${cleanUrl}#Intent;scheme=${proto};action=android.intent.action.VIEW;package=idm.internet.download.manager;type=video/*;end`;
 
             showToast("📥 Launching in 1DM...");
 
             if (navigator.clipboard && navigator.clipboard.writeText) {
-                navigator.clipboard.writeText(fullUrl).catch(() => {});
+                navigator.clipboard.writeText(accelUrl).catch(() => {});
             }
 
             let appOpened = false;
@@ -4371,14 +4383,16 @@
             await handlePlayClick(releaseIndex, streamUrl, rawTarget, title, badge, posterUrl);
         }
 
-        function handleExternalPlayerChoice(choice, streamUrl) {
+        function handleExternalPlayerChoice(choice, streamUrl, mirrorUrl = '', rawUrl = '') {
             const target = streamUrl || currentDirectUrl || currentStreamUrl;
+            const mirror = mirrorUrl || (typeof currentMirrorUrl !== 'undefined' ? currentMirrorUrl : '');
+            const raw = rawUrl || (typeof currentRawUrl !== 'undefined' ? currentRawUrl : '');
             if (choice === 'vlc') {
-                openExternalVLC(target);
+                openExternalVLC(target, 0, mirror, raw);
             } else if (choice === 'cx') {
-                openExternalCX(target);
+                openExternalCX(target, mirror, raw);
             } else if (choice === '1dm') {
-                openExternal1DM(target);
+                openExternal1DM(target, mirror, raw);
             } else if (choice === 'swarm') {
                 switchPlayerMode('swarm');
             } else if (choice === 'bingr_hls') {
@@ -4394,6 +4408,7 @@
             const topRelease = currentDetailReleases[0];
             const rawTarget = topRelease.target_url || topRelease.direct_url || '';
             const safeStreamUrl = rawTarget ? `${API_BASE}/playback/resolve?url=${encodeURIComponent(rawTarget)}&title=${encodeURIComponent(currentDetailLabelTitle || 'PLAYRO Stream')}` : '';
+            const mirror = topRelease.mirror_url || '';
 
             if (choice === 'swarm') {
                 playSwarmStream(0, safeStreamUrl, rawTarget, currentDetailLabelTitle, topRelease.resolution || '4K', currentDetailPosterUrl);
@@ -4404,7 +4419,7 @@
                 return;
             }
             if (!safeStreamUrl) return;
-            handleExternalPlayerChoice(choice, safeStreamUrl);
+            handleExternalPlayerChoice(choice, safeStreamUrl, mirror, rawTarget);
         }
 
         function toggleVlcMode() {
@@ -4645,7 +4660,7 @@
             const isMkv = badgeStr.includes('MKV') || directStr.endsWith('.mkv');
 
             if (vlcModeEnabled) {
-                openExternalVLC(currentDirectUrl || currentStreamUrl, item.currentTime || 0);
+                openExternalVLC(currentDirectUrl || currentStreamUrl, item.currentTime || 0, currentMirrorUrl, currentRawUrl);
                 return;
             }
 

@@ -85,20 +85,19 @@ async def test_initial_start_google_wire_speed(client: httpx.AsyncClient):
 
 @pytest.mark.anyio
 async def test_seeking_notimplemented_waterfalls_to_swarm(client: httpx.AsyncClient):
-    """Seeking (p_start > 0) with NotImplementedError waterfalls cleanly to swarm_stream_engine."""
+    """Seeking with mirror parameter waterfalls directly to swarm_stream_engine."""
     google_url = "https://video-downloads.googleusercontent.com/test_video.mkv"
+    mirror_url = "https://worker.playro.workers.dev/movie.mkv"
     total_file_size = 500_000_000
 
     with patch("main.google_range_adapter") as mock_gra, \
          patch("main.swarm_stream_engine") as mock_sse:
 
         mock_gra.is_google_url.return_value = True
-        mock_gra.is_sequential_only = MagicMock(return_value=False)
         mock_gra.probe_metadata = AsyncMock(return_value={
             "total_size": total_file_size,
             "content_type": "video/x-matroska",
         })
-        mock_gra.handle_range_request = AsyncMock(side_effect=NotImplementedError("Sequential-only Google URL"))
 
         mock_sse.stream_range = AsyncMock(return_value=Response(
             content=b"SWARM_STREAM_SEEK_DATA",
@@ -107,7 +106,7 @@ async def test_seeking_notimplemented_waterfalls_to_swarm(client: httpx.AsyncCli
         ))
 
         resp = await client.get(
-            f"/api/stream/accelerated?url={google_url}",
+            f"/api/stream/accelerated?url={google_url}&mirror={mirror_url}",
             headers={"Range": "bytes=1048576-2097151"}
         )
 
